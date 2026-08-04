@@ -306,6 +306,7 @@ function isOpenTodo(t: Todo): boolean {
 }
 
 function getOpenTodos(todos: Todo[]): Todo[] {
+    if (!Array.isArray(todos)) return []
     return todos.filter(isOpenTodo)
 }
 
@@ -1911,13 +1912,14 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             case "todo.updated": {
                 if (!sid) break
                 const props = ev.properties as Record<string, unknown> | undefined
-                const todos = (props?.todos as Array<Record<string, unknown>>) ?? []
-                
+                const rawTodos = props?.todos
+                const todos: Array<Record<string, unknown>> = Array.isArray(rawTodos) ? rawTodos : []
+
                 const w = ensureWatch(sid)
                 w.todos = todos.map((t) => ({
-                    content: (t.content as string) ?? "",
-                    status: (t.status as Todo["status"]) ?? "pending",
-                    priority: (t.priority as Todo["priority"]) ?? "medium",
+                    content: (t?.content as string) ?? "",
+                    status: (t?.status as Todo["status"]) ?? "pending",
+                    priority: (t?.priority as Todo["priority"]) ?? "medium",
                 }))
                 break
             }
