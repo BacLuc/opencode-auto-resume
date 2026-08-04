@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test"
-import { backoffMs, AutoResumePlugin } from "./index"
+import { backoffMs } from "./test-utils"
+import { AutoResumePlugin } from "./index"
 
 describe("backoffMs()", () => {
     describe("formula verification", () => {

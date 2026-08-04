@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test"
-import { backoffMs } from "./index"
+import { backoffMs } from "./test-utils"
 
 /**
  * WP-08 Step 6: Extended state machine transitions (WP-02 through WP-05).

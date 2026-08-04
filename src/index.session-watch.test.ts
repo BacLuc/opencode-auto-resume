@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test"
-import type { SessionWatch } from "./index"
-import { backoffMs } from "./index"
+import type { SessionWatch } from "./test-utils"
+import { backoffMs } from "./test-utils"
 
 function createWatch(sid: string, now = Date.now()): SessionWatch {
     return {

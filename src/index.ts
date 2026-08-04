@@ -191,7 +191,7 @@ function containsDoneClaimPattern(text: string): boolean {
     return DONE_CLAIM_PATTERNS.some((pat) => pat.test(lastLines))
 }
 
-export function isStreamingFailure(
+function isStreamingFailure(
     errorName: string,
     errorMessage: string,
     errorNames: string[] = DEFAULT_STREAMING_FAILURE_ERROR_NAMES,
@@ -225,7 +225,7 @@ export function isStreamingFailure(
  * any `type === "retry"` part's `error` field (SDK RetryPart surface).
  * Returns `{ name, message }` or null if no assistant message has an error.
  */
-export function getLastAssistantError(
+function getLastAssistantError(
     messages: Array<Record<string, unknown>>,
 ): { name: string; message: string } | null {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -275,7 +275,7 @@ export function getLastAssistantError(
  * Exponential backoff for recovery retries: `base * 2^(attempt-1)`, capped at `max`.
  * Exported as a pure function for unit testing (WP-08).
  */
-export function backoffMs(
+function backoffMs(
     attempt: number,
     baseBackoffMs: number = DEFAULT_BASE_BACKOFF_MS,
     maxBackoffMs: number = DEFAULT_MAX_BACKOFF_MS,
@@ -310,7 +310,7 @@ function getOpenTodos(todos: Todo[]): Todo[] {
     return todos.filter(isOpenTodo)
 }
 
-export function buildOpenTodosReminder(todos: Todo[]): string {
+function buildOpenTodosReminder(todos: Todo[]): string {
     if (!Array.isArray(todos)) return "continue"
     const open = todos.filter(t => t.status === "pending" || t.status === "in_progress")
     if (open.length === 0) return "continue"

@@ -70,7 +70,7 @@ describe("REGRESSION: todo.updated with non-array todos must not crash the plugi
     })
 
     test("REGRESSION CONTRACT: buildOpenTodosReminder must guard against non-array input", () => {
-        const m = SOURCE.match(/export function buildOpenTodosReminder[\s\S]*?\n\}/)
+        const m = SOURCE.match(/function buildOpenTodosReminder[\s\S]*?\n\}/)
         expect(m, "buildOpenTodosReminder function not found").not.toBeNull()
         expect(m![0]).toContain("Array.isArray")
     })

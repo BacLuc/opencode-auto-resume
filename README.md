@@ -349,3 +349,4 @@ The plugin handles all recovery automatically — no manual intervention needed.
 | Hallucination loop not caught | Decrease `loopMaxContinues` to `2` |
 | Tool-text not detected | Check server logs — requires SDK message fetching |
 | Long-running tool killed | Should not happen — active-tool guard prevents it. Report a bug. |
+| `Unexpected server error` on startup | Update to v1.1.8+. Caused by non-Plugin exports being treated as plugin entrypoints by OpenCode's loader. Clear the plugin cache (`~/.cache/opencode/packages/opencode-auto-resume@*`) and restart. |

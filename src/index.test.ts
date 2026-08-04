@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { buildOpenTodosReminder } from "./index"
+import { buildOpenTodosReminder } from "./test-utils"
 
 function short(id: string): string {
     return id.length > 8 ? id.slice(0, 4) + "…" + id.slice(-4) : id

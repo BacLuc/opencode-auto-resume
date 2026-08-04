@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test"
-import { AutoResumePlugin, getLastAssistantError } from "./index"
+import { getLastAssistantError } from "./test-utils"
+import { AutoResumePlugin } from "./index"
 
 type PromptCall = { sid: string; body: string; agent?: string }
 

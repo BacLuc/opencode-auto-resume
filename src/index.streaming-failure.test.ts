@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test"
-import { isStreamingFailure } from "./index"
+import { isStreamingFailure } from "./test-utils"
 
 describe("isStreamingFailure()", () => {
     // Acceptance criteria
