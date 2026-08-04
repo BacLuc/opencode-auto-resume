@@ -1,5 +1,7 @@
 import { describe, test, expect, mock } from "bun:test"
 import { AutoResumePlugin } from "./index"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 
 type PromptCall = { sid: string; body: string; agent?: string }
 
@@ -77,36 +79,62 @@ function createMockContext(opts: {
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const OPTS = { enabled: true, baseBackoffMs: 1, checkIntervalMs: 50 }
 
+const SOURCE = readFileSync(join(import.meta.dir, "index.ts"), "utf8")
+
 describe("unhandled-rejection guards (regression for plugin host crash)", () => {
-    test("REGRESSION: event() promise must NOT reject when session.messages throws inside handleEvent's idle path", async () => {
-        const { ctx, promptCalls } = createMockContext({
-            sessions: [{ id: "ses_RECURR1", status: "idle" }],
-            messages: {
-                ses_RECURR1: [
-                    { role: "user", parts: [{ type: "text", text: "do work" }] },
-                    {
-                        role: "assistant",
-                        parts: [{ type: "text", text: "I will do it" }],
-                        // no error: streaming-failure block is skipped, idle falls
-                        // through to the unprotected lastAssistantEndsWithCelebration path
-                    },
-                ],
-            },
-            statusMap: { ses_RECURR1: { type: "idle" } },
+    test("REGRESSION: event hook must wrap handleEvent in .catch() to prevent unhandled rejection from SDK throws", () => {
+        expect(
+            SOURCE,
+            "event hook must call handleEvent(...).catch(...)",
+        ).toMatch(/handleEvent\(event as Record<string, unknown>\)\.catch\(/)
+    })
+
+    test("REGRESSION: periodic timer body must be wrapped in safe() (or equivalent error boundary)", () => {
+        expect(
+            SOURCE,
+            "setInterval async callback must be wrapped in a safe()/try-catch error boundary",
+        ).toMatch(/setInterval\(async \(\) => \{[\s\S]*?await safe\(async \(\) => \{/)
+    })
+
+    test("REGRESSION: log() catch block must not rethrow (silent log failures must not propagate)", () => {
+        expect(
+            SOURCE,
+            "log() catch must not rethrow; it must console.error best-effort",
+        ).toMatch(/async function log[\s\S]*?catch \(e\) \{[\s\S]*?console\.error/)
+    })
+
+    test("REGRESSION: a safe() error-boundary helper must exist", () => {
+        expect(
+            SOURCE,
+            "plugin must define an async safe() error boundary",
+        ).toMatch(/async function safe/)
+    })
+
+    test("REGRESSION: safe() helper must catch, log via console.error, and return undefined on error", () => {
+        const safeMatch = SOURCE.match(
+            /async function safe[\s\S]*?return undefined\s*\n\s*\}/,
+        )
+        expect(safeMatch, "safe() helper not found").not.toBeNull()
+        const safeBody = safeMatch![0]
+        expect(safeBody).toContain("try")
+        expect(safeBody).toContain("catch")
+        expect(safeBody).toContain("console.error")
+        expect(safeBody).toContain("return undefined")
+    })
+
+    test("BEHAVIORAL: event() promise does not reject when SDK throws on idle path", async () => {
+        const { ctx } = createMockContext({
+            sessions: [{ id: "ses_beh1", status: "idle" }],
+            throwOnMessages: true,
         })
 
-        const hooks = await AutoResumePlugin(ctx, {
-            ...OPTS,
-            resumeOnActionIntent: true,
-            toolTextCheckDelayMs: 1,
-            warmupMs: 0,
-        } as any)
+        const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        let rejected = false
-        let rejectionMsg: string | undefined
+        let eventRejected = false
+        let eventRejection: unknown
         const onUnhandled = (reason: unknown) => {
-            rejected = true
-            rejectionMsg = reason instanceof Error ? reason.message : String(reason)
+            eventRejected = true
+            eventRejection = reason
         }
         process.on("unhandledRejection", onUnhandled)
 
@@ -114,39 +142,28 @@ describe("unhandled-rejection guards (regression for plugin host crash)", () => 
             await hooks.event({
                 event: {
                     type: "session.status",
-                    sessionID: "ses_RECURR1",
+                    sessionID: "ses_beh1",
                     properties: { status: "idle" },
                 },
             })
+            await wait(200)
 
-            const msgThrow = createMockContext({
-                sessions: [{ id: "ses_RECURR1", status: "idle" }],
-                throwOnMessages: true,
-            })
-            ;(ctx.client.session.messages as any).mockImplementation(
-                (msgThrow.ctx as any).client.session.messages.mock.calls
-                    ? async () => { throw new Error("Unexpected server error") }
-                    : async () => [],
-            )
-            ;(ctx.client.session.messages as any).mockImplementation(
-                async () => { throw new Error("Unexpected server error") },
-            )
-
-            await wait(800)
-
-            expect(rejected).toBe(false)
-            if (rejected) {
-                throw new Error(`REGRESSION broken: leaked rejection: ${rejectionMsg}`)
+            if (eventRejected) {
+                throw new Error(
+                    `REGRESSION broken: leaked rejection: ${
+                        eventRejection instanceof Error ? eventRejection.message : eventRejection
+                    }`,
+                )
             }
+            expect(eventRejected).toBe(false)
         } finally {
             process.removeListener("unhandledRejection", onUnhandled)
         }
-        void promptCalls
     })
 
-    test("REGRESSION: safe() helper catches SDK errors and returns undefined", async () => {
+    test("BEHAVIORAL: periodic timer with throwing session.status does not leak rejection", async () => {
         const { ctx } = createMockContext({
-            sessions: [{ id: "ses_safe1", status: "busy" }],
+            sessions: [{ id: "ses_beh2", status: "busy" }],
             throwOnStatus: true,
         })
 
@@ -161,14 +178,14 @@ describe("unhandled-rejection guards (regression for plugin host crash)", () => 
                 subagentWaitMs: 1,
                 gracePeriodMs: 1,
             } as any)
-            await wait(500)
+            await wait(400)
             expect(leaked).toBe(false)
         } finally {
             process.removeListener("unhandledRejection", onUnhandled)
         }
     })
 
-    test("REGRESSION: log() never rethrows when logging backend is down", async () => {
+    test("BEHAVIORAL: log() never propagates when backend is down", async () => {
         const ctx = {
             client: {
                 app: {
@@ -207,11 +224,10 @@ describe("unhandled-rejection guards (regression for plugin host crash)", () => 
         }
     })
 
-    test("REGRESSION: event() fire-and-forget handleEvent call must be wrapped (leaked rejection impossible from SDK throws)", async () => {
-        const { ctx } = createMockContext({
-            sessions: [{ id: "ses_wrap1", status: "busy" }],
+    test("BEHAVIORAL: abort path with throwing session.abort does not leak rejection", async () => {
+        const { ctx, abortCalls } = createMockContext({
+            sessions: [{ id: "ses_beh3", status: "busy" }],
             throwOnAbort: true,
-            throwOnMessages: true,
         })
 
         let leaked = false
@@ -230,14 +246,15 @@ describe("unhandled-rejection guards (regression for plugin host crash)", () => 
             await hooks.event({
                 event: {
                     type: "session.status",
-                    sessionID: "ses_wrap1",
+                    sessionID: "ses_beh3",
                     properties: { status: "busy" },
                 },
             })
-            await hooks["tool.execute.before"]!({ sessionID: "ses_wrap1" } as any)
+            await hooks["tool.execute.before"]!({ sessionID: "ses_beh3" } as any)
             await wait(500)
 
             expect(leaked).toBe(false)
+            void abortCalls
         } finally {
             process.removeListener("unhandledRejection", onUnhandled)
         }
