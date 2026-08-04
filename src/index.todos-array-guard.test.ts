@@ -1,5 +1,9 @@
 import { describe, test, expect, mock } from "bun:test"
 import { AutoResumePlugin } from "./index"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+
+const SOURCE = readFileSync(join(import.meta.dir, "index.ts"), "utf8")
 
 type PromptCall = { sid: string; body: string; agent?: string }
 
@@ -52,6 +56,24 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const OPTS = { enabled: true, baseBackoffMs: 1, checkIntervalMs: 99999 }
 
 describe("REGRESSION: todo.updated with non-array todos must not crash the plugin", () => {
+    test("REGRESSION CONTRACT: todo.updated handler must coerce non-array todos via Array.isArray", () => {
+        expect(
+            SOURCE,
+            "todo.updated handler must validate Array.isArray before .map() — this is the crash root cause from v1.1.4+",
+        ).toMatch(/Array\.isArray\(rawTodos\)/)
+    })
+
+    test("REGRESSION CONTRACT: getOpenTodos must guard against non-array input", () => {
+        const m = SOURCE.match(/function getOpenTodos[\s\S]*?\n\}/)
+        expect(m, "getOpenTodos function not found").not.toBeNull()
+        expect(m![0]).toContain("Array.isArray")
+    })
+
+    test("REGRESSION CONTRACT: buildOpenTodosReminder must guard against non-array input", () => {
+        const m = SOURCE.match(/export function buildOpenTodosReminder[\s\S]*?\n\}/)
+        expect(m, "buildOpenTodosReminder function not found").not.toBeNull()
+        expect(m![0]).toContain("Array.isArray")
+    })
     test("todo.updated with properties = {} (missing todos field) does not throw", async () => {
         const { ctx } = createMockContext()
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
