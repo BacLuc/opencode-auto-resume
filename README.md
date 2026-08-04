@@ -265,11 +265,7 @@ Periodic: cleanup idle sessions older than 10min or >50 entries
 
 ## Installation
 
-### Via npm (recommended)
-
-```bash
-npm install opencode-auto-resume
-```
+### Opencode
 
 Add to your `opencode.jsonc`:
 
@@ -292,17 +288,6 @@ With options:
     }]
   ]
 }
-```
-
-### Via GitHub (manual clone)
-
-OpenCode may clone the repository to `~/.config/opencode/plugins/opencode-auto-resume/` automatically.
-
-**To update** the plugin:
-```bash
-cd ~/.config/opencode/plugins/opencode-auto-resume
-git pull
-bun run build
 ```
 
 ## Configuration
