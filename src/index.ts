@@ -191,10 +191,6 @@ function containsDoneClaimPattern(text: string): boolean {
     return DONE_CLAIM_PATTERNS.some((pat) => pat.test(lastLines))
 }
 
-/**
- * Classify an error as a streaming failure by error name (exact, case-sensitive)
- * or by message content (regex, case-insensitive).
- */
 export function isStreamingFailure(
     errorName: string,
     errorMessage: string,
@@ -221,6 +217,58 @@ export function isStreamingFailure(
     }
 
     return false
+}
+
+/**
+ * Extract the most recent assistant-message error from a message list.
+ * Checks (in priority order): message.error, message.info.error, and
+ * any `type === "retry"` part's `error` field (SDK RetryPart surface).
+ * Returns `{ name, message }` or null if no assistant message has an error.
+ */
+export function getLastAssistantError(
+    messages: Array<Record<string, unknown>>,
+): { name: string; message: string } | null {
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i]
+        const role =
+            (msg.role as string) ??
+            ((msg.info as Record<string, unknown> | undefined)?.role as string)
+        if (role !== "assistant") continue
+
+        const info = msg.info as Record<string, unknown> | undefined
+        const err =
+            (msg.error as Record<string, unknown> | undefined) ??
+            (info?.error as Record<string, unknown> | undefined)
+        if (err) {
+            const data = err.data as Record<string, unknown> | undefined
+            const name = (err.name as string) ?? ""
+            const message =
+                (data?.message as string) ?? (err.message as string) ?? ""
+            return { name, message }
+        }
+
+        const parts = msg.parts as Array<Record<string, unknown>> | undefined
+        if (parts) {
+            for (let j = parts.length - 1; j >= 0; j--) {
+                const part = parts[j]
+                if (part.type !== "retry") continue
+                const partErr = part.error as
+                    | Record<string, unknown>
+                    | undefined
+                if (!partErr) continue
+                const data = partErr.data as
+                    | Record<string, unknown>
+                    | undefined
+                const name = (partErr.name as string) ?? ""
+                const message =
+                    (data?.message as string) ??
+                    (partErr.message as string) ??
+                    ""
+                return { name, message }
+            }
+        }
+    }
+    return null
 }
 
 /**
@@ -267,7 +315,9 @@ export function buildOpenTodosReminder(todos: Todo[]): string {
     if (open.length === 0) return "continue"
     const list = open.map((t, i) => `${i + 1}. [${t.status}] ${t.content}`).join("\n")
     const plural = open.length > 1 ? "s" : ""
-    return `You have ${open.length} unfinished task${plural}:\n${list}\n\nPlease continue working on these task${plural}.`
+    const taskWord = open.length > 1 ? "tasks" : "task"
+    const thisWord = open.length > 1 ? "these" : "this"
+    return `You have ${open.length} unfinished task${plural}:\n${list}\n\nPlease continue working on ${thisWord} ${taskWord}.`
 }
 
 export const AutoResumePlugin: Plugin = async (ctx, options) => {
@@ -1211,7 +1261,6 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                     await log("info", `${short(sid)} - max open-todos nudges (${maxRetries}) reached, waiting for activity`)
                     return
                 }
-                w.todoNudgeAttempts++
             } else if (isDoneClaimNoTodos) {
                 w.doneClaimNoTodosAttempts++
             } else {
@@ -1249,6 +1298,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             } else {
                 try {
                     await sendContinuePrompt(sid, bestCandidate.prompt, w)
+                    if (isOpenTodosReminder) w.todoNudgeAttempts++
                     await log("info", `${short(sid)} - ${bestCandidate.source} recovery sent (attempt ${w.toolTextAttempts})`)
                 } catch (err) {
                     const errMsg = err instanceof Error ? err.message : String(err)
@@ -1657,6 +1707,51 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                     log("debug", `${short(sid)} -> idle (${currentBusy})`)
 
                     if (!w.isSubagent) {
+                        if (
+                            !w.pendingRecovery &&
+                            !w.completionSignaled &&
+                            !w.userCancelled &&
+                            !w.aborting
+                        ) {
+                            try {
+                                const errInfo = getLastAssistantError(
+                                    await getSessionMessages(sid),
+                                )
+                                if (
+                                    errInfo &&
+                                    isStreamingFailure(
+                                        errInfo.name,
+                                        errInfo.message,
+                                        streamingFailureErrorNames,
+                                        streamingFailureMessagePatterns,
+                                    )
+                                ) {
+                                    w.pendingRecovery = true
+                                    w.pendingRecoveryReason = errInfo.name
+                                    w.pendingRecoveryAt = Date.now()
+                                    dbg(
+                                        `State transition on ${short(sid)}: pendingRecovery=false -> true, reason=${errInfo.name}`,
+                                    )
+                                    await log(
+                                        "info",
+                                        `${short(sid)} - streaming failure detected on idle: ${errInfo.name} - ${errInfo.message}`,
+                                    )
+                                    await tryResume(
+                                        sid,
+                                        w,
+                                        "Streaming failure on idle",
+                                        continuePrompt,
+                                    )
+                                }
+                            } catch (e) {
+                                const errMsg =
+                                    e instanceof Error ? e.message : String(e)
+                                dbg(
+                                    `session.idle sid=${short(sid)}: streaming-failure check error: ${errMsg}`,
+                                )
+                            }
+                        }
+
                         const todos = w.todos || []
                         const open = getOpenTodos(todos)
                         
