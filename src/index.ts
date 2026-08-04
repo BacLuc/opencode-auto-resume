@@ -393,7 +393,20 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     async function log(level: "debug" | "info" | "warn" | "error", msg: string) {
         try {
             await ctx.client.app.log({ body: { service: "auto-resume", level, message: msg } })
-        } catch { /* ignore */ }
+        } catch (e) {
+            console.error("[auto-resume] log() failed:", e instanceof Error ? e.message : String(e))
+        }
+    }
+
+    async function safe<T>(fn: () => Promise<T>, ctxLabel: string): Promise<T | undefined> {
+        try {
+            return await fn()
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e)
+            console.error(`[auto-resume] ${ctxLabel}: ${msg}`)
+            try { await log("error", `${ctxLabel}: ${msg}`) } catch { /* logging best-effort */ }
+            return undefined
+        }
     }
 
     function ensureWatch(sid: string): SessionWatch {
@@ -1439,9 +1452,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     function startTimer() {
         if (timer) return
         timer = setInterval(async () => {
-            const now = Date.now()
-            const numBusy = busyCount()
-            const statusMap = await getSessionStatusMap()
+            await safe(async () => {
+                const now = Date.now()
+                const numBusy = busyCount()
+                const statusMap = await getSessionStatusMap()
 
             for (const [sid, w] of sessions) {
                 const realStatus = statusMap[sid]
@@ -1638,13 +1652,14 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
 
             // Periodic cleanup
             cleanupIdleSessions()
+            }, "periodic timer")
         }, checkIntervalMs)
 
         if (timer.unref) timer.unref()
 
         // Periodic session discovery
         discoveryTimer = setInterval(() => {
-            discoverSessions()
+            safe(discoverSessions, "discoveryTimer").catch(() => {})
         }, SESSION_DISCOVERY_INTERVAL_MS)
         if (discoveryTimer.unref) discoveryTimer.unref()
 
@@ -2018,7 +2033,11 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 initialised = true
                 log("info", `opencode-auto-resume ready. timeout=${chunkTimeoutMs}ms, orphan=${subagentWaitMs}ms, loop=${loopMaxContinues}x/${loopWindowMs / 1000}s`)
             }
-            handleEvent(event as Record<string, unknown>)
+            handleEvent(event as Record<string, unknown>).catch((e) => {
+                const msg = e instanceof Error ? e.message : String(e)
+                console.error(`[auto-resume] handleEvent error: ${msg}`)
+                log("error", `handleEvent error: ${msg}`).catch(() => {})
+            })
         },
 
         config: async () => {
