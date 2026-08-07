@@ -97,7 +97,8 @@ const createRealisticContext = () => {
                     })
                     return {}
                 }),
-                abort: mock(async () => ({}))
+                abort: mock(async () => ({})),
+                todo: mock(async () => ({ data: [] }))
             }
         },
         ui: {
@@ -201,6 +202,7 @@ describe("Plugin Integration", () => {
                         return {}
                     }),
                     abort: mock(async () => ({})),
+                    todo: mock(async () => ({ data: [] })),
                 },
             },
         } as any

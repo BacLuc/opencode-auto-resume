@@ -95,6 +95,33 @@ function createWatch(sid: string, now = 1000): WatchState {
     return w
 }
 
+function resetBusyFlags(w: WatchState) {
+    w.resumeAttempts = 0
+    w.pendingTools = 0
+    w.pendingCommands = 0
+    w.gaveUp = false
+    w.orphanWatchStartAt = null
+    w.aborting = false
+    w.toolTextRecovered = false
+    w.toolTextAttempts = 0
+    w.continueTimestamps = []
+    w.idleSince = null
+    w.continuing = false
+    w.todoCheckAttempts = 0
+    w.checkingToolText = false
+    w.interruptedContinueCount = 0
+    w.recentToolCalls = []
+    w.toolLoopAttempts = 0
+    w.pendingRecovery = false
+    w.pendingRecoveryReason = null
+    w.pendingRecoveryAt = 0
+    w.recoveryAttempts = 0
+    w.watchdogRetryGuard = false
+    w.todoNudgeAttempts = 0
+    w.doneClaimNoTodosAttempts = 0
+    // PRESERVE: userCancelled, completionSignaled
+}
+
 function resetSessionFlags(w: WatchState) {
     w.userCancelled = false
     w.resumeAttempts = 0
@@ -225,7 +252,7 @@ function stallRetryFailures(w: WatchState, maxRetries: number): "retried" | "gav
 function goBusy(w: WatchState, now = Date.now()) {
     w.status = "busy"
     w.lastActivityAt = now
-    resetSessionFlags(w)
+    resetBusyFlags(w)
 }
 
 function goIdle(w: WatchState, now = Date.now()) {
@@ -252,7 +279,7 @@ describe("Extended state machine transitions", () => {
             expect(w.aborting).toBe(false)
         })
 
-        test("busy transition resets all session flags", () => {
+        test("busy transition resets operational flags but PRESERVES userCancelled (FIX #16)", () => {
             const w = createWatch("ses_s2")
             w.userCancelled = true
             w.resumeAttempts = 2
@@ -264,7 +291,7 @@ describe("Extended state machine transitions", () => {
             w.recoveryAttempts = 2
             goBusy(w, 2000)
             expect(w.status).toBe("busy")
-            expect(w.userCancelled).toBe(false)
+            expect(w.userCancelled).toBe(true)   // PRESERVED — ESC sticks across busy events
             expect(w.resumeAttempts).toBe(0)
             expect(w.gaveUp).toBe(false)
             expect(w.toolTextAttempts).toBe(0)
@@ -568,14 +595,14 @@ describe("Extended state machine transitions", () => {
             expect(w.pendingRecoveryReason).toBe("ProviderError")
         })
 
-        test("user cancel clears on the next busy event", () => {
+        test("user cancel PERSISTS across busy events (FIX #16: ESC sticks)", () => {
             const w = createWatch("ses_u4")
             goBusy(w, 2000)
             detectStreamingFailure(w, "ProviderError", 2500)
             goIdle(w, 3000)
             w.userCancelled = true
             goBusy(w, 4000)
-            expect(w.userCancelled).toBe(false)
+            expect(w.userCancelled).toBe(true)   // PRESERVED across busy
             expect(w.pendingRecovery).toBe(false)
         })
     })
@@ -660,14 +687,14 @@ describe("Extended state machine transitions", () => {
     })
 
     describe("field persistence across cycles", () => {
-        test("todoNudgeAttempts persists across a busy/idle cycle", () => {
+        test("todoNudgeAttempts resets on busy (FIX: previously never reset)", () => {
             const w = createWatch("ses_p1")
             goIdle(w, 2000)
             w.todoNudgeAttempts = 2
             goBusy(w, 3000)
-            expect(w.todoNudgeAttempts).toBe(2)
+            expect(w.todoNudgeAttempts).toBe(0)  // reset on busy — fresh nudge budget
             goIdle(w, 4000)
-            expect(w.todoNudgeAttempts).toBe(2)
+            expect(w.todoNudgeAttempts).toBe(0)
         })
 
         test("toolTextAttempts resets on busy", () => {
@@ -692,11 +719,10 @@ describe("Extended state machine transitions", () => {
             expect(w.pendingRecoveryReason).toBe("TimeoutError")
         })
 
-        test("todoNudgeAttempts persists while the timer loop guards on it", () => {
+        test("todoNudgeAttempts can be set and read for timer guard logic", () => {
             const w = createWatch("ses_p4")
             goIdle(w, 2000)
             w.todoNudgeAttempts = 3
-            w.todoNudgeAttempts = w.todoNudgeAttempts
             expect(w.todoNudgeAttempts).toBe(3)
         })
     })

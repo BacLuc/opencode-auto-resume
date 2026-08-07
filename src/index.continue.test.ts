@@ -30,8 +30,9 @@ function createContinueContext(opts: {
                     }))
                 })),
                 status: mock(async () => ({ data: statusMap })),
+                todo: mock(async () => ({ data: [] })),
                 messages: mock(async (config: { path: { id: string } }) => {
-                    return opts.messages[config.path.id] ?? []
+                    return { data: opts.messages[config.path.id] ?? [] }
                 }),
                 prompt: mock(async (config: {
                     path: { id: string }
@@ -165,7 +166,7 @@ describe("Continue behavior — single session", () => {
         expect(promptCalls.length).toBe(0)
     })
 
-    test("🎉 in last assistant message → NO continue even with open todos", async () => {
+    test("🎉 in last assistant message WITH open todos → continue sent (FIX #16: 🎉 is a false positive if todos open)", async () => {
         const { ctx, promptCalls } = createContinueContext({
             sessions: [{ id: "ses_emoji", status: "busy" }],
             messages: {
@@ -177,10 +178,11 @@ describe("Continue behavior — single session", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         await hooks.event(makeTodoUpdatedEvent("ses_emoji", OPEN_TODOS))
+        await hooks.event(makeStatusEvent("ses_emoji", "busy"))
         await hooks.event(makeStatusEvent("ses_emoji", "idle"))
 
         await wait(300)
-        expect(promptCalls.length).toBe(0)
+        expect(promptCalls.length).toBeGreaterThanOrEqual(1)
     })
 })
 
@@ -269,29 +271,29 @@ describe("Continue behavior — repeated continues until done", () => {
 
         // Cycle 1: idle → continue
         await hooks.event(makeStatusEvent("ses_loop", "idle"))
-        await wait(100)
+        await wait(200)
         expect(promptCalls.length).toBe(1)
 
         // Agent works again
         await hooks.event(makeStatusEvent("ses_loop", "busy"))
-        await wait(50)
+        await wait(100)
 
         // Cycle 2: idle again, still no 🎉 → continue
         messages.ses_loop.push({ role: "assistant", parts: [{ type: "text", text: "step 2 done" }] })
         await hooks.event(makeStatusEvent("ses_loop", "idle"))
-        await wait(100)
+        await wait(200)
         expect(promptCalls.length).toBe(2)
 
-        // Cycle 3: agent finishes with 🎉 → no more continues
+        // Cycle 3: agent writes 🎉 but todos are STILL OPEN → false positive, continue fires
         await hooks.event(makeStatusEvent("ses_loop", "busy"))
-        await wait(50)
+        await wait(100)
 
         messages.ses_loop.push({ role: "assistant", parts: [{ type: "text", text: "All done 🎉" }] })
         await hooks.event(makeStatusEvent("ses_loop", "idle"))
         await wait(300)
 
-        // Still only 2 continues — 🎉 blocked the 3rd
-        expect(promptCalls.length).toBe(2)
+        // 3 continues — 🎉 with open todos is a false positive (FIX #16)
+        expect(promptCalls.length).toBe(3)
     })
 
     test("continue fires across multiple idle cycles until todos close", async () => {
@@ -311,31 +313,31 @@ describe("Continue behavior — repeated continues until done", () => {
 
         // Cycle 1: idle → continue
         await hooks.event(makeStatusEvent("ses_todos", "idle"))
-        await wait(100)
+        await wait(200)
         expect(promptCalls.length).toBe(1)
 
         // Cycle 2: busy → idle, still open → continue
         await hooks.event(makeStatusEvent("ses_todos", "busy"))
-        await wait(50)
+        await wait(100)
 
         messages.ses_todos.push({ role: "assistant", parts: [{ type: "text", text: "step 2" }] })
         await hooks.event(makeStatusEvent("ses_todos", "idle"))
-        await wait(100)
+        await wait(200)
         expect(promptCalls.length).toBe(2)
 
         // Cycle 3: todos close → no continue
         await hooks.event(makeStatusEvent("ses_todos", "busy"))
-        await wait(50)
+        await wait(100)
 
         messages.ses_todos.push({ role: "assistant", parts: [{ type: "text", text: "step 3" }] })
         await hooks.event(makeTodoUpdatedEvent("ses_todos", CLOSED_TODOS))
         await hooks.event(makeStatusEvent("ses_todos", "idle"))
-        await wait(200)
+        await wait(300)
 
         expect(promptCalls.length).toBe(2)
     })
 
-    test("continue fires repeatedly — todoNudgeAttempts persists across busy/idle cycles", async () => {
+    test("continue fires repeatedly — todoNudgeAttempts resets on busy (fresh budget each cycle)", async () => {
         const messages = {
             ses_persist: [
                 { role: "user", parts: [{ type: "text", text: "do work" }] },
@@ -352,12 +354,12 @@ describe("Continue behavior — repeated continues until done", () => {
 
         for (let i = 1; i <= 5; i++) {
             await hooks.event(makeStatusEvent("ses_persist", "idle"))
-            await wait(100)
+            await wait(200)
             expect(promptCalls.length).toBe(i)
 
             if (i < 5) {
                 await hooks.event(makeStatusEvent("ses_persist", "busy"))
-                await wait(50)
+                await wait(100)
                 messages.ses_persist.push({
                     role: "assistant",
                     parts: [{ type: "text", text: `step ${i + 1}` }]
@@ -370,7 +372,7 @@ describe("Continue behavior — repeated continues until done", () => {
 })
 
 describe("Continue behavior — 🎉 race condition fix", () => {
-    test("idle handler checks 🎉 before calling tryResume (not deferred to 3s timer)", async () => {
+    test("idle handler checks 🎉 before calling tryResume (with NO open todos → no continue)", async () => {
         const { ctx, promptCalls } = createContinueContext({
             sessions: [{ id: "ses_race", status: "busy" }],
             messages: {
@@ -381,22 +383,19 @@ describe("Continue behavior — 🎉 race condition fix", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event(makeTodoUpdatedEvent("ses_race", OPEN_TODOS))
+        // NO open todos → 🎉 correctly signals completion
+        await hooks.event(makeTodoUpdatedEvent("ses_race", []))
 
-        // Fire idle event — the fix should detect 🎉 synchronously in the idle handler
         await hooks.event(makeStatusEvent("ses_race", "idle"))
 
-        // Wait less than the 3s tool-text timer — if the fix works,
-        // no continue should be sent even before the timer fires
         await wait(300)
         expect(promptCalls.length).toBe(0)
 
-        // Wait past the 3s timer to confirm it still doesn't fire
         await wait(3500)
         expect(promptCalls.length).toBe(0)
     })
 
-    test("🎉 with punctuation before emoji → still detected", async () => {
+    test("🎉 with punctuation before emoji → still detected (with NO open todos)", async () => {
         const { ctx, promptCalls } = createContinueContext({
             sessions: [{ id: "ses_punct", status: "busy" }],
             messages: {
@@ -407,14 +406,14 @@ describe("Continue behavior — 🎉 race condition fix", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event(makeTodoUpdatedEvent("ses_punct", OPEN_TODOS))
+        await hooks.event(makeTodoUpdatedEvent("ses_punct", []))
         await hooks.event(makeStatusEvent("ses_punct", "idle"))
 
         await wait(300)
         expect(promptCalls.length).toBe(0)
     })
 
-    test("🎉 with whitespace before emoji → still detected", async () => {
+    test("🎉 with whitespace before emoji → still detected (with NO open todos)", async () => {
         const { ctx, promptCalls } = createContinueContext({
             sessions: [{ id: "ses_ws", status: "busy" }],
             messages: {
@@ -425,7 +424,7 @@ describe("Continue behavior — 🎉 race condition fix", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event(makeTodoUpdatedEvent("ses_ws", OPEN_TODOS))
+        await hooks.event(makeTodoUpdatedEvent("ses_ws", []))
         await hooks.event(makeStatusEvent("ses_ws", "idle"))
 
         await wait(300)

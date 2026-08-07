@@ -31,6 +31,8 @@ function createMockContext(opts: {
                     }))
                 })),
                 status: mock(async () => ({ data: statusMap })),
+                todo: mock(async () => ({ data: [] })),
+                todo: mock(async () => ({ data: [] })),
                 messages: mock(async (config: { path: { id: string } }) => {
                     return opts.messages[config.path.id] ?? []
                 }),
@@ -283,7 +285,7 @@ describe("handleEvent - session.interrupted", () => {
         expect(promptCalls.length).toBe(0)
     })
 
-    test("after Esc, user writes message → busy clears userCancelled → idle resumes continues", async () => {
+    test("after Esc, busy event does NOT clear userCancelled (FIX issue #16)", async () => {
         const { ctx, promptCalls } = createMockContext({
             sessions: [{ id: "ses_test1", status: "busy" }],
             messages: {}
@@ -302,13 +304,14 @@ describe("handleEvent - session.interrupted", () => {
         await wait(100)
         expect(promptCalls.length).toBe(0)
 
+        // busy event must NOT clear userCancelled (the bug was: plugin's own resume triggers busy → clears ESC)
         await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } })
         await wait(50)
 
         await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } })
         await wait(200)
 
-        expect(promptCalls.length).toBe(1)
+        expect(promptCalls.length).toBe(0)  // ESC sticks — no resume after interrupt
     })
 })
 
@@ -652,7 +655,7 @@ describe("task_complete tool", () => {
 })
 
 describe("done-claim text detection (no tool call)", () => {
-    test("todoNudgeAttempts persists across busy/idle cycle (not reset by resetSessionFlags)", async () => {
+    test("todoNudgeAttempts resets on busy→work cycle (FIX: previously never reset)", async () => {
         const { ctx, promptCalls } = createMockContext({
             sessions: [{ id: "ses_persist", status: "busy" }],
             messages: {}
@@ -670,26 +673,26 @@ describe("done-claim text detection (no tool call)", () => {
 
         // First idle → reminder sent (nudge 1)
         await hooks.event({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "idle" } } })
-        await wait(30)
+        await wait(100)
         expect(promptCalls.length).toBeGreaterThanOrEqual(1)
 
-        // Session goes busy → resetSessionFlags called, but todoNudgeAttempts should persist
+        // Session goes busy → resetBusyFlags now resets todoNudgeAttempts to 0
         await hooks.event({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "busy" } } })
-        await wait(10)
+        await wait(50)
 
-        // Second idle → reminder sent (nudge 2)
+        // Second idle → fresh nudge budget, reminder sent again
         await hooks.event({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "idle" } } })
-        await wait(30)
+        await wait(100)
         expect(promptCalls.length).toBeGreaterThanOrEqual(2)
 
-        // Third idle → maxRetries (2) reached, no more nudges
+        // Another busy→idle cycle — counter resets again
         await hooks.event({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "busy" } } })
-        await wait(10)
+        await wait(50)
         await hooks.event({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "idle" } } })
-        await wait(30)
+        await wait(100)
 
-        // Should still be 2, not 3 — counter persisted
-        expect(promptCalls.length).toBe(2)
+        // Counter reset on busy, so nudge 3 fires (previously was blocked at 2)
+        expect(promptCalls.length).toBeGreaterThanOrEqual(3)
     })
 
     test("done-claim text with no open todos → sends DONE_WITHOUT_WORK_PROMPT", async () => {
@@ -731,7 +734,7 @@ describe("done-claim text detection (no tool call)", () => {
         expect(lastPrompt).toContain("verify")
     })
 
-    test("done-claim text with no open todos → stops after maxRetries", async () => {
+    test("done-claim text with no open todos → sends prompts, resets on busy", async () => {
         const { ctx, promptCalls } = createMockContext({
             sessions: [{ id: "ses_cap", status: "busy" }],
             messages: {
@@ -762,22 +765,22 @@ describe("done-claim text detection (no tool call)", () => {
 
         // First idle → prompt sent (attempt 1/2)
         await hooks.event({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "idle" } } })
-        await wait(30)
+        await wait(100)
         expect(promptCalls.length).toBe(1)
 
-        // Busy → idle again (attempt 2/2)
+        // Busy resets the counter (fresh budget)
         await hooks.event({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "busy" } } })
-        await wait(10)
+        await wait(50)
         await hooks.event({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "idle" } } })
-        await wait(30)
+        await wait(100)
         expect(promptCalls.length).toBe(2)
 
-        // Busy → idle again → should NOT send (cap reached)
+        // Busy resets again → another prompt (counter is fresh each cycle now)
         await hooks.event({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "busy" } } })
-        await wait(10)
+        await wait(50)
         await hooks.event({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "idle" } } })
-        await wait(30)
-        expect(promptCalls.length).toBe(2)
+        await wait(100)
+        expect(promptCalls.length).toBe(3)
     })
 })
 

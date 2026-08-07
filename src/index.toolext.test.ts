@@ -31,6 +31,7 @@ function createMockContext(opts: {
                     }))
                 })),
                 status: mock(async () => ({ data: statusMap })),
+                todo: mock(async () => ({ data: [] })),
                 messages: mock(async (config: { path: { id: string } }) => {
                     return opts.messages[config.path.id] ?? []
                 }),
@@ -379,7 +380,7 @@ describe("checkForToolCallAsText detection", () => {
         expect(verifyCalls.length).toBe(1)
     })
 
-    test("Assistant text ends with 🎉 → NO prompt sent", async () => {
+    test("Assistant text ends with 🎉 with NO open todos → NO prompt sent", async () => {
         const { ctx, promptCalls } = createMockContext({
             sessions: [{ id: "ses_test13", status: "idle" }],
             messages: {
@@ -395,7 +396,7 @@ describe("checkForToolCallAsText detection", () => {
         })
 
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
-        await hooks.event(makeTodoUpdatedEvent("ses_test13", OPEN_TODOS))
+        await hooks.event(makeTodoUpdatedEvent("ses_test13", []))
         await hooks.event(makeStatusEvent("ses_test13", "busy"))
         await hooks.event(makeStatusEvent("ses_test13", "idle"))
         await wait(3500)

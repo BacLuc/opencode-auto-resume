@@ -178,6 +178,10 @@ const DONE_CLAIM_PATTERNS = [
     /^all\s+tasks?\s+complete[.!]*$/im,
     /^all\s+tasks?\s+completed[.!]*$/im,
     /^(?:i['']?m\s+)?done\s+with\s+task/im,
+    /\bdone\s+with\s+(?:the\s+)?(?:task|work|implementation)/im,
+    /\bfinished\s+(?:the\s+)?(?:task|work|implementation)/im,
+    /\b(?:all|everything)\s+(?:is\s+)?(?:complete|done|finished)/im,
+    /\bnothing\s+(?:else\s+)?(?:left|remaining|to do)/im,
 ]
 
 const DONE_WITHOUT_WORK_PROMPT =
@@ -187,7 +191,7 @@ const DONE_WITHOUT_WORK_PROMPT =
 
 function containsDoneClaimPattern(text: string): boolean {
     const lines = text.split('\n')
-    const lastLines = lines.slice(-3).join('\n')
+    const lastLines = lines.slice(-5).join('\n')
     return DONE_CLAIM_PATTERNS.some((pat) => pat.test(lastLines))
 }
 
@@ -615,6 +619,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             await log("debug", `${short(sid)} - continue already in progress, skipping`)
             return
         }
+        if (w.userCancelled || w.completionSignaled) return
         if (!w.continuing) dbg(`State transition on ${short(sid)}: continuing=false -> true`)
         w.continuing = true
         if (w.watchdogRetryGuard) {
@@ -824,6 +829,24 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         }
     }
 
+    async function fetchSessionTodos(sid: string): Promise<Todo[]> {
+        if (typeof sid !== "string" || !sid.startsWith("ses")) return []
+        try {
+            const todoFn = (ctx.client.session as any).todo
+            if (typeof todoFn !== "function") return []
+            const response = await todoFn.call(ctx.client.session, { path: { id: sid } })
+            const rawTodos = ((response as Record<string, unknown>).data ?? response) as unknown
+            if (!Array.isArray(rawTodos)) return []
+            return rawTodos.map((t) => ({
+                content: (t?.content as string) ?? "",
+                status: (t?.status as Todo["status"]) ?? "pending",
+                priority: (t?.priority as Todo["priority"]) ?? "medium",
+            }))
+        } catch {
+            return []
+        }
+    }
+
     const SUBAGENT_STUCK_MS = 60_000
 
     const SUBAGENT_RECOVERY_PROMPT = "It looks like you may have stalled or timed out. Please retry the last operation or continue with the task."
@@ -966,6 +989,34 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         w.pendingRecoveryAt = 0
         w.recoveryAttempts = 0
         w.watchdogRetryGuard = false
+    }
+
+    function resetBusyFlags(w: SessionWatch) {
+        w.resumeAttempts = 0
+        w.lastRetryAt = 0
+        w.pendingTools = 0
+        w.pendingCommands = 0
+        w.gaveUp = false
+        w.orphanWatchStartAt = null
+        w.aborting = false
+        w.toolTextRecovered = false
+        w.toolTextAttempts = 0
+        w.todoCheckAttempts = 0
+        w.checkingToolText = false
+        w.interruptedContinueCount = 0
+        w.recentToolCalls = []
+        w.toolLoopAttempts = 0
+        w.pendingRecovery = false
+        w.pendingRecoveryReason = null
+        w.pendingRecoveryAt = 0
+        w.recoveryAttempts = 0
+        w.watchdogRetryGuard = false
+        if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
+        // Reset nudge budget on each genuine new busy→work cycle (user prompt or agent re-engagement after nudge)
+        w.todoNudgeAttempts = 0
+        w.doneClaimNoTodosAttempts = 0
+        w.continueTimestamps = []
+        // PRESERVE: userCancelled, completionSignaled, idleSince, continuing
     }
 
     function resetIdleFlags(w: SessionWatch) {
@@ -1242,11 +1293,16 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             const trimmedText = allAssistantText.trim()
             const normalized = trimmedText.replace(/[.!?]+$/, '')
             if (normalized.endsWith('🎉') && (!bestCandidate || bestCandidate.priority > 0)) {
-                await log("info", `${short(sid)} - 🎉 completion detected, skipping continue`)
-                w.toolTextRecovered = true
-                w.completionSignaled = true
-                if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
-                return
+                const openCount = getOpenTodos(w.todos || []).length
+                if (openCount > 0) {
+                    await log("info", `${short(sid)} - 🎉 detected but ${openCount} open todos remain, NOT latching completion`)
+                } else {
+                    await log("info", `${short(sid)} - 🎉 completion detected, skipping continue`)
+                    w.toolTextRecovered = true
+                    w.completionSignaled = true
+                    if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
+                    return
+                }
             }
 
             if (!bestCandidate) {
@@ -1336,8 +1392,8 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             await log("warn", `Invalid sid for abort: ${sid} (must start with "ses_")`)
             return false
         }
+        if (w.userCancelled || w.completionSignaled) return false
         if (w.aborting) return false
-        w.aborting = true
 
         const idleSec = Math.round((Date.now() - (w.orphanWatchStartAt ?? w.lastActivityAt)) / 1000)
         await log("info", `Abort+Resume on ${short(sid)} (${idleSec}s idle). Aborting...`)
@@ -1436,7 +1492,12 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                         if (status === "idle") w.idleSince = Date.now()
                     }
                     if (isNew) {
-                        log("debug", `Discovered session ${short(sid)} via list()`)
+                        log("debug", `Discovered session ${short(sid)} via list() — fetching todos`)
+                        const fetched = await fetchSessionTodos(sid)
+                        if (fetched.length > 0) {
+                            const w = sessions.get(sid)!
+                            w.todos = fetched
+                        }
                     }
                 }
             }
@@ -1466,7 +1527,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 }
                 
                 if (w.status !== "busy") continue
-                if (w.userCancelled) continue
+                if (w.userCancelled || w.completionSignaled) continue
                 if (w.aborting) continue
 
                 if (w.orphanWatchStartAt !== null) {
@@ -1631,6 +1692,13 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 if (w.userCancelled || w.completionSignaled) continue
                 if (w.continuing) continue
                 if (busyCount() !== 0) continue
+                // Lazy fetch: if we never received a todo.updated event, try the API
+                if ((w.todos || []).length === 0) {
+                    const fetched = await fetchSessionTodos(sid)
+                    if (fetched.length > 0) {
+                        w.todos = fetched
+                    }
+                }
                 const open = getOpenTodos(w.todos || [])
                 if (open.length === 0) continue
                 if (w.todoNudgeAttempts >= maxRetries) continue
@@ -1639,8 +1707,13 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 if (w.lastRetryAt > 0 && elapsedSinceLastNudge < requiredBackoff) continue
                 const isCelebration = await lastAssistantEndsWithCelebration(sid)
                 if (isCelebration) {
-                    w.toolTextRecovered = true
-                    w.completionSignaled = true
+                    const openCount = getOpenTodos(w.todos || []).length
+                    if (openCount > 0) {
+                        await log("info", `${short(sid)} - 🎉 detected in periodic recheck but ${openCount} open todos remain, NOT latching completion`)
+                    } else {
+                        w.toolTextRecovered = true
+                        w.completionSignaled = true
+                    }
                     continue
                 }
                 const reminder = buildOpenTodosReminder(w.todos || [])
@@ -1695,7 +1768,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                     if (w.pendingRecovery) {
                         dbg(`Pending recovery cleared on ${short(sid)}: reason=session-busy`)
                     }
-                    resetSessionFlags(w)
+                    resetBusyFlags(w)
                     prevBusyCount = busyCount()
                     log("debug", `${short(sid)} -> busy (${prevBusyCount})`)
                 } else if (statusType === "interrupted") {
@@ -1768,21 +1841,30 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                             }
                         }
 
-                        const todos = w.todos || []
+                        let todos = w.todos || []
+                        // Lazy fetch: if we never received a todo.updated event, try the API
+                        if (todos.length === 0) {
+                            const fetched = await fetchSessionTodos(sid)
+                            if (fetched.length > 0) {
+                                w.todos = fetched
+                                todos = fetched
+                            }
+                        }
                         const open = getOpenTodos(todos)
                         
                         if (open.length > 0 && currentBusy === 0 && !w.completionSignaled && !w.userCancelled && w.todoNudgeAttempts < maxRetries) {
                             const isCelebration = await lastAssistantEndsWithCelebration(sid)
+                            await log("info", `${short(sid)} - open todos=${open.length}, isCelebration=${isCelebration}, currentBusy=${currentBusy}`)
                             if (isCelebration) {
-                                await log("info", `${short(sid)} - 🎉 detected in idle handler, skipping continue`)
-                                w.toolTextRecovered = true
-                                w.completionSignaled = true
-                                if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
-                            } else {
-                                w.todoNudgeAttempts++
+                                // 🎉 with open todos is a FALSE POSITIVE - don't latch completionSignaled, send nudge
+                                await log("info", `${short(sid)} - 🎉 detected but ${open.length} open todos remain, sending nudge`)
                                 const reminder = buildOpenTodosReminder(todos)
-                                await log("info", `${short(sid)} - idle with ${open.length} open todos. Sending reminder (nudge ${w.todoNudgeAttempts}/${maxRetries})...`)
+                                await tryResume(sid, w, "Idle with open todos (celebration false positive)", reminder)
+                                w.todoNudgeAttempts++
+                            } else {
+                                const reminder = buildOpenTodosReminder(todos)
                                 await tryResume(sid, w, "Idle with open todos", reminder)
+                                w.todoNudgeAttempts++
                             }
                         }
                     }
@@ -1807,7 +1889,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                                         }
                                         if (containsActionIntent(lastText)) {
                                             const w2 = sessions.get(idleSid)
-                                            if (!w2 || w2.toolTextRecovered || w2.completionSignaled || w2.status !== "idle") return
+                                             if (!w2 || w2.toolTextRecovered || w2.completionSignaled || w2.userCancelled || w2.status !== "idle") return
                                             w2.toolTextRecovered = true
                                             w2.toolTextAttempts++
                                             dbg(`session.idle sid=${short(idleSid)}: ACTION INTENT DETECTED, sending "${actionIntentPrompt.slice(0, 40)}..."`)
@@ -1871,7 +1953,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                                     }
                                     if (containsActionIntent(lastText)) {
                                         const w2 = sessions.get(sid)
-                                        if (!w2 || w2.toolTextRecovered || w2.completionSignaled || w2.status !== "idle") return
+                                         if (!w2 || w2.toolTextRecovered || w2.completionSignaled || w2.userCancelled || w2.status !== "idle") return
                                         w2.toolTextRecovered = true
                                         w2.toolTextAttempts++
                                         dbg(`session.idle sid=${short(sid)}: ACTION INTENT DETECTED, sending "${actionIntentPrompt.slice(0, 40)}..."`)
@@ -1979,15 +2061,13 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             }
 
             case "command.executed": {
-                for (const [sid2, w] of sessions) {
-                    if (w.pendingRecovery) {
-                        dbg(`Pending recovery cleared on ${short(sid2)}: reason=user-command`)
-                    }
-                    resetSessionFlags(w)
-                }
                 if (!sid) break
                 const w = sessions.get(sid)
                 if (w) {
+                    if (w.pendingRecovery) {
+                        dbg(`Pending recovery cleared on ${short(sid)}: reason=user-command`)
+                    }
+                    resetBusyFlags(w)
                     w.pendingCommands = Math.max(0, w.pendingCommands - 1)
                     w.lastActivityAt = Date.now()
                 }
