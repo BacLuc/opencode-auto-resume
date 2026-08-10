@@ -395,7 +395,23 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         return w.continueTimestamps.length >= loopMaxContinues
     }
 
+    const recentLogMsgs = new Map<string, number>()
+    const LOG_DEDUP_WINDOW_MS = 5000
+
     async function log(level: "debug" | "info" | "warn" | "error", msg: string) {
+        // Suppress repeated identical debug messages within 5s to avoid log storms during DB contention.
+        // Only dedup debug — info/warn/error must always be logged for visibility.
+        if (level === "debug") {
+            const key = `${level}:${msg}`
+            const now = Date.now()
+            const last = recentLogMsgs.get(key)
+            if (last && now - last < LOG_DEDUP_WINDOW_MS) return
+            recentLogMsgs.set(key, now)
+            if (recentLogMsgs.size > 200) {
+                const oldest = [...recentLogMsgs.entries()].sort((a, b) => a[1] - b[1])
+                for (let i = 0; i < 100; i++) recentLogMsgs.delete(oldest[i][0])
+            }
+        }
         try {
             await ctx.client.app.log({ body: { service: "auto-resume", level, message: msg } })
         } catch (e) {
@@ -773,9 +789,21 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         return []
     }
 
+    const messagesInflight = new Map<string, Promise<Array<Record<string, unknown>>>>()
+
     async function getSessionMessages(sid: string): Promise<Array<Record<string, unknown>>> {
-        const response = await ctx.client.session.messages({ path: { id: sid } })
-        return extractMessages(response as Record<string, unknown>)
+        const inflight = messagesInflight.get(sid)
+        if (inflight) return inflight
+        const p = (async () => {
+            try {
+                const response = await ctx.client.session.messages({ path: { id: sid } })
+                return extractMessages(response as Record<string, unknown>)
+            } finally {
+                messagesInflight.delete(sid)
+            }
+        })()
+        messagesInflight.set(sid, p)
+        return p
     }
 
     function roleOf(msg: Record<string, unknown> | undefined): string | undefined {
@@ -829,22 +857,41 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         }
     }
 
+    // In-memory cache + inflight dedup to avoid concurrent SQLite reads
+    const todoCache = new Map<string, { todos: Todo[]; fetchedAt: number }>()
+    const todoInflight = new Map<string, Promise<Todo[]>>()
+    const TODO_CACHE_TTL_MS = 2000
+
     async function fetchSessionTodos(sid: string): Promise<Todo[]> {
         if (typeof sid !== "string" || !sid.startsWith("ses")) return []
-        try {
-            const todoFn = (ctx.client.session as any).todo
-            if (typeof todoFn !== "function") return []
-            const response = await todoFn.call(ctx.client.session, { path: { id: sid } })
-            const rawTodos = ((response as Record<string, unknown>).data ?? response) as unknown
-            if (!Array.isArray(rawTodos)) return []
-            return rawTodos.map((t) => ({
-                content: (t?.content as string) ?? "",
-                status: (t?.status as Todo["status"]) ?? "pending",
-                priority: (t?.priority as Todo["priority"]) ?? "medium",
-            }))
-        } catch {
-            return []
-        }
+        // Cache hit — avoid hitting the DB if we fetched recently
+        const cached = todoCache.get(sid)
+        if (cached && Date.now() - cached.fetchedAt < TODO_CACHE_TTL_MS) return cached.todos
+        // Dedup concurrent calls for the same session — only one DB query at a time
+        const inflight = todoInflight.get(sid)
+        if (inflight) return inflight
+        const p = (async () => {
+            try {
+                const todoFn = (ctx.client.session as any).todo
+                if (typeof todoFn !== "function") return []
+                const response = await todoFn.call(ctx.client.session, { path: { id: sid } })
+                const rawTodos = ((response as Record<string, unknown>).data ?? response) as unknown
+                if (!Array.isArray(rawTodos)) return []
+                const todos = rawTodos.map((t) => ({
+                    content: (t?.content as string) ?? "",
+                    status: (t?.status as Todo["status"]) ?? "pending",
+                    priority: (t?.priority as Todo["priority"]) ?? "medium",
+                }))
+                todoCache.set(sid, { todos, fetchedAt: Date.now() })
+                return todos
+            } catch {
+                return []
+            } finally {
+                todoInflight.delete(sid)
+            }
+        })()
+        todoInflight.set(sid, p)
+        return p
     }
 
     const SUBAGENT_STUCK_MS = 60_000
@@ -1879,8 +1926,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                                         dbg(`session.idle sid=${short(idleSid)}: skipping action intent, session is warming up (${Date.now() - idleW.createdAt}ms < ${warmupMs}ms)`)
                                         return
                                     }
-                                    const response = await ctx.client.session.messages({ path: { id: idleSid } })
-                                    const msgs = extractMessages(response as Record<string, unknown>)
+                                    const msgs = await getSessionMessages(idleSid)
                                     const lastAssistantMsg = msgs.slice().reverse().find(m => (m.role ?? (m.info as Record<string, unknown> | undefined)?.role) === "assistant")
                                     if (lastAssistantMsg) {
                                         let lastText = ""
@@ -1943,8 +1989,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                                     dbg(`session.idle sid=${short(sid)}: skipping action intent, session is warming up (${Date.now() - w.createdAt}ms < ${warmupMs}ms)`)
                                     return
                                 }
-                                const response = await ctx.client.session.messages({ path: { id: sid } })
-                                const msgs = extractMessages(response as Record<string, unknown>)
+                                const msgs = await getSessionMessages(sid)
                                 const lastAssistantMsg = msgs.slice().reverse().find(m => (m.role ?? (m.info as Record<string, unknown> | undefined)?.role) === "assistant")
                                 if (lastAssistantMsg) {
                                     let lastText = ""
