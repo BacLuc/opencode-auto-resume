@@ -500,7 +500,7 @@ describe("task_complete tool", () => {
         expect(promptCalls.length).toBe(0)
     })
 
-    test("task_complete on subagent session → toolTextRecovered NOT set; subsequent idle still triggers continue", async () => {
+    test("task_complete on subagent session → completionSignaled IS set; subsequent idle does NOT trigger continue", async () => {
         const { ctx, promptCalls } = createMockContext({
             sessions: [
                 { id: "ses_parent", status: "busy" },
@@ -514,31 +514,21 @@ describe("task_complete tool", () => {
         await hooks.event({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } })
         await hooks.event({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "busy" } } })
 
-        // Simulate orphan watch - sub goes idle, parent becomes orphan watch target
+        // Sub goes idle
         await hooks.event({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "idle" } } })
         await wait(50)
 
-        // Now call task_complete on subagent
+        // Call task_complete on subagent
         const result = await hooks.tool["task_complete"].execute({}, { sessionID: "ses_sub" } as any)
 
         expect(result).toContain("Task completion acknowledged")
 
-        // Set up open todos for subagent
-        await hooks.event({
-            event: {
-                type: "todo.updated",
-                sessionID: "ses_sub",
-                properties: { todos: [{ id: "t1", content: "sub task", status: "pending", priority: "medium" }] }
-            }
-        })
-
-        // Send idle on subagent - should still trigger continue because it's a subagent
+        // Send idle again on subagent - should NOT trigger continue because completionSignaled is now set
         await hooks.event({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "idle" } } })
-
         await wait(100)
 
-        // Subagent continue should still be sent
-        expect(promptCalls.length).toBeGreaterThanOrEqual(0)
+        // No continue should have been sent to the subagent
+        expect(promptCalls.length).toBe(0)
     })
 
     test("task_complete with unknown sessionID → no crash, returns acknowledgment", async () => {

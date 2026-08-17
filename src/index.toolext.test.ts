@@ -376,8 +376,8 @@ describe("checkForToolCallAsText detection", () => {
         await hooks.event(makeStatusEvent("ses_test12", "idle"))
         await wait(3500)
 
-        const verifyCalls = promptCalls.filter(c => c.body.includes("verify"))
-        expect(verifyCalls.length).toBe(1)
+        const reportCalls = promptCalls.filter(c => c.body.includes("detailed report"))
+        expect(reportCalls.length).toBe(1)
     })
 
     test("Assistant text ends with 🎉 with NO open todos → NO prompt sent", async () => {

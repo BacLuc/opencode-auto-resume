@@ -189,6 +189,14 @@ const DONE_WITHOUT_WORK_PROMPT =
     "Your response indicated you're done, but no work was detected. Please check your todo list " +
     "and complete any remaining work."
 
+const DONE_WITHOUT_DETAILS_PROMPT =
+    "Your last response claimed the task is complete but contained no work description. This is not acceptable. " +
+    "You MUST respond now with a full, detailed report of everything you did: " +
+    "for each file you modified, state the full path and the exact changes; " +
+    "list every command you ran to verify and its result; state the final outcome. " +
+    "Do NOT reply with 'done', 'task completed', or any short acknowledgment — " +
+    "your ONLY acceptable response right now is this detailed report. Write it now."
+
 function containsDoneClaimPattern(text: string): boolean {
     const lines = text.split('\n')
     const lastLines = lines.slice(-5).join('\n')
@@ -369,7 +377,9 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     const thinkingToolRecoveryPrompt: string =
     (options?.thinkingToolRecoveryPrompt as string) ?? THINKING_TOOL_RECOVERY_PROMPT
     const doneWithoutWorkPrompt: string =
-    (options?.doneWithoutWorkPrompt as string) ?? DONE_WITHOUT_WORK_PROMPT
+        (options?.doneWithoutWorkPrompt as string) ?? DONE_WITHOUT_WORK_PROMPT
+    const doneWithoutDetailsPrompt: string =
+        (options?.doneWithoutDetailsPrompt as string) ?? DONE_WITHOUT_DETAILS_PROMPT
     const dbg = (...args: unknown[]) => { if (debug) console.log("[debug]", ...args) }
 
     const sessions = new Map<string, SessionWatch>()
@@ -1305,9 +1315,9 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                             priority: 1,
                         }
                     } else if (w.doneClaimNoTodosAttempts < maxRetries) {
-                        await log("info", `${short(sid)} - model claims done with no open todos. Sending verification prompt (attempt ${w.doneClaimNoTodosAttempts + 1}/${maxRetries})...`)
+                        await log("info", `${short(sid)} - model claims done with no open todos. Sending details prompt (attempt ${w.doneClaimNoTodosAttempts + 1}/${maxRetries})...`)
                         bestCandidate = {
-                            prompt: doneWithoutWorkPrompt,
+                            prompt: doneWithoutDetailsPrompt,
                             source: "done-claim-no-todos",
                             priority: 1,
                         }
@@ -2126,7 +2136,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     // -----------------------------------------------------------------------
 
     const taskCompleteTool = tool({
-        description: "Signal that all work is complete. Call this when you have finished everything requested.",
+        description: "Signal that all work is complete and stop automatic continuation prompts. Call this ONLY after finishing everything requested.",
         args: {},
         execute: async (_args, ctx) => {
             const w = sessions.get(ctx.sessionID)
@@ -2139,11 +2149,11 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                         await log("info", `${short(ctx.sessionID)} - task_complete blocked: ${openTodos.length} open todos remain (override ${w.taskCompleteOverrides}/${maxRetries})`)
                         return `You have ${openTodos.length} unfinished task(s). Please complete all remaining work before signaling completion.`
                     }
-
-                    w.toolTextRecovered = true
-                    w.completionSignaled = true
-                    if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
                 }
+
+                w.toolTextRecovered = true
+                w.completionSignaled = true
+                if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
                 log("info", `${short(ctx.sessionID)} - task_complete called, ${w.isSubagent ? 'subagent' : 'agent'} done`)
             }
             return "Task completion acknowledged. No further continuation will be sent."
