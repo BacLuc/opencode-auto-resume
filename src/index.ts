@@ -28,6 +28,7 @@ export interface SessionWatch {
     gaveUp: boolean
     orphanWatchStartAt: number | null
     aborting: boolean
+    pluginAbortInFlight: boolean
     toolTextRecovered: boolean
     toolTextAttempts: number
     continueTimestamps: number[]
@@ -69,6 +70,7 @@ const DEFAULT_TOOL_TEXT_CHECK_DELAY_MS = 3_000
 const DEFAULT_MAX_RECOVERY_RETRIES = 2
 const DEFAULT_MIN_ACTIVITY_GAP_MS = 1_000
 const DEFAULT_WARMUP_MS = 15_000
+const DEFAULT_SILENT_DEAD_STREAM_MIN_TOKENS = 200
 const DEFAULT_DEBUG = false
 
 const DEFAULT_STREAMING_FAILURE_ERROR_NAMES = [
@@ -284,6 +286,43 @@ function getLastAssistantError(
 }
 
 /**
+ * Detects a silent dead stream: message finished with a non-terminal finish reason
+ * but emitted no text parts (only reasoning or no parts at all). This can happen when
+ * the model stream dies mid-response. Returns the finish reason and output token count
+ * if detected, null otherwise.
+ */
+function getLastSilentDeadStream(
+    messages: Array<Record<string, unknown>>,
+): { finish: string; outputTokens: number } | null {
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i]
+        const role = (msg.role as string) ??
+            ((msg.info as Record<string, unknown> | undefined)?.role as string)
+        if (role !== "assistant") continue
+
+        const info = msg.info as Record<string, unknown> | undefined
+        const finish = (msg.finish as string) ??
+            (info?.finish as string) ??
+            (info?.finishReason as string)
+        if (!finish) continue
+
+        const parts = (msg.parts as Array<Record<string, unknown>> | undefined) ?? []
+        const hasText = parts.some((p) => {
+            const t = p as Record<string, unknown>
+            return t.type === "text" && typeof t.text === "string" && t.text.length > 0
+        })
+        if (hasText) continue
+
+        const tokens = msg.tokens as Record<string, unknown> | undefined
+        const tInfo = info?.tokens as Record<string, unknown> | undefined
+        const output = ((tokens?.output as number) ?? 0) +
+            ((tInfo?.output as number) ?? 0)
+        return { finish, outputTokens: output }
+    }
+    return null
+}
+
+/**
  * Exponential backoff for recovery retries: `base * 2^(attempt-1)`, capped at `max`.
  * Exported as a pure function for unit testing (WP-08).
  */
@@ -380,6 +419,8 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         (options?.doneWithoutWorkPrompt as string) ?? DONE_WITHOUT_WORK_PROMPT
     const doneWithoutDetailsPrompt: string =
         (options?.doneWithoutDetailsPrompt as string) ?? DONE_WITHOUT_DETAILS_PROMPT
+    const silentDeadStreamMinTokens: number =
+        (options?.silentDeadStreamMinTokens as number) ?? DEFAULT_SILENT_DEAD_STREAM_MIN_TOKENS
     const dbg = (...args: unknown[]) => { if (debug) console.log("[debug]", ...args) }
 
     const sessions = new Map<string, SessionWatch>()
@@ -453,6 +494,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 gaveUp: false,
                 orphanWatchStartAt: null,
                 aborting: false,
+                pluginAbortInFlight: false,
                 toolTextRecovered: false,
                 toolTextAttempts: 0,
                 continueTimestamps: [],
@@ -1455,6 +1497,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         const idleSec = Math.round((Date.now() - (w.orphanWatchStartAt ?? w.lastActivityAt)) / 1000)
         await log("info", `Abort+Resume on ${short(sid)} (${idleSec}s idle). Aborting...`)
 
+        w.pluginAbortInFlight = true
         try {
             await ctx.client.session.abort({ path: { id: sid } })
             await log("info", `${short(sid)} - abort OK`)
@@ -1463,6 +1506,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             const errMsg = err instanceof Error ? err.message : String(err)
             await log("warn", `${short(sid)} - abort failed: ${errMsg}`)
             w.aborting = false
+            w.pluginAbortInFlight = false
             return false
         }
 
@@ -1482,6 +1526,8 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             await log("warn", `${short(sid)} - continue after abort failed: ${errMsg}`)
             w.aborting = false
             return false
+        } finally {
+            w.pluginAbortInFlight = false
         }
     }
 
@@ -1896,6 +1942,37 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                                     `session.idle sid=${short(sid)}: streaming-failure check error: ${errMsg}`,
                                 )
                             }
+
+                            // Silent dead stream: finish="unknown" with no text parts
+                            try {
+                                const dead = getLastSilentDeadStream(
+                                    await getSessionMessages(sid),
+                                )
+                                if (
+                                    dead &&
+                                    dead.outputTokens >= silentDeadStreamMinTokens
+                                ) {
+                                    w.pendingRecovery = true
+                                    w.pendingRecoveryReason = `silent-${dead.finish}`
+                                    w.pendingRecoveryAt = Date.now()
+                                    await log(
+                                        "info",
+                                        `${short(sid)} - silent dead stream: finish=${dead.finish}, ${dead.outputTokens} output tokens, no text parts; resuming`,
+                                    )
+                                    await tryResume(
+                                        sid,
+                                        w,
+                                        `Silent dead stream (${dead.finish})`,
+                                        continuePrompt,
+                                    )
+                                }
+                            } catch (e) {
+                                const errMsg =
+                                    e instanceof Error ? e.message : String(e)
+                                dbg(
+                                    `session.idle sid=${short(sid)}: silent-dead-stream check error: ${errMsg}`,
+                                )
+                            }
                         }
 
                         let todos = w.todos || []
@@ -2071,7 +2148,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
 
                 if (isMessageAborted) {
                     for (const [wSid, w] of sessions) {
-                        if (w.status === "busy") {
+                        if (!w.pluginAbortInFlight) {
                             w.userCancelled = true
                             w.status = "idle"
                             resetIdleFlags(w)
