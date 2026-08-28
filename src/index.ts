@@ -2261,6 +2261,25 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             "task_complete": taskCompleteTool,
         },
 
+        "chat.message": async (input) => {
+            const sid = input?.sessionID
+            if (!sid) return
+            const w = ensureWatch(sid)
+            w.lastActivityAt = Date.now()
+            // Recovery prompts this plugin sends via session.prompt() also land
+            // here, but only while `continuing` is latched (sendContinuePrompt
+            // holds it across the await). A message arriving with `continuing`
+            // unset is a genuine user (or external client) prompt: a new round
+            // of work, so lift the ESC back-off and the task_complete latch.
+            // Busy-state resets must still preserve both flags (issue #16).
+            if (w.continuing) return
+            if (w.userCancelled || w.completionSignaled) {
+                w.userCancelled = false
+                w.completionSignaled = false
+                await log("info", `${short(sid)} - new user message, re-arming auto-resume`)
+            }
+        },
+
         "tool.execute.before": async (input) => {
             if (!input?.sessionID) return
             const w = ensureWatch(input.sessionID)
