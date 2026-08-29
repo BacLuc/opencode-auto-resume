@@ -174,6 +174,8 @@ _Motivated by:_
 
 User presses ESC to cancel a request. The plugin detects `MessageAbortedError` and marks all busy sessions as cancelled, never resuming them. The grace period (`gracePeriodMs`) also lets late ESC/status events arrive before any action.
 
+The back-off lifts as soon as the user sends a new prompt in that session (`chat.message` hook): a fresh user message starts a new round of work, so auto-resume re-arms. The plugin's own recovery prompts do not re-arm it. The same applies to the `task_complete` latch.
+
 _Motivated by:_
 - [#28453](https://github.com/anomalyco/opencode/issues/28453) — ACP session/cancel emits agent_error for MessageAbortedError before cancelled result
 - [#32432](https://github.com/anomalyco/opencode/issues/32432) — Cancelled subagents can't be opened in TUI + Ctrl+X intermittently fails
