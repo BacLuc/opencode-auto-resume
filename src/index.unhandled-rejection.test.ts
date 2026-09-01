@@ -139,13 +139,13 @@ describe("unhandled-rejection guards (regression for plugin host crash)", () => 
         process.on("unhandledRejection", onUnhandled)
 
         try {
-            await hooks.event({
+            await hooks.event!({
                 event: {
                     type: "session.status",
                     sessionID: "ses_beh1",
                     properties: { status: "idle" },
                 },
-            })
+            } as any)
             await wait(200)
 
             if (eventRejected) {
@@ -210,13 +210,13 @@ describe("unhandled-rejection guards (regression for plugin host crash)", () => 
 
         try {
             const hooks = await AutoResumePlugin(ctx, OPTS as any)
-            await hooks.event({
+            await hooks.event!({
                 event: {
                     type: "session.status",
                     sessionID: "ses_logfail",
                     properties: { status: "idle" },
                 },
-            })
+            } as any)
             await wait(250)
             expect(leaked).toBe(false)
         } finally {
@@ -243,14 +243,14 @@ describe("unhandled-rejection guards (regression for plugin host crash)", () => 
                 chunkTimeoutMs: 1,
             } as any)
 
-            await hooks.event({
+            await hooks.event!({
                 event: {
                     type: "session.status",
                     sessionID: "ses_beh3",
                     properties: { status: "busy" },
                 },
-            })
-            await hooks["tool.execute.before"]!({ sessionID: "ses_beh3" } as any)
+            } as any)
+            await hooks["tool.execute.before"]!({ sessionID: "ses_beh3" } as any, {} as any)
             await wait(500)
 
             expect(leaked).toBe(false)

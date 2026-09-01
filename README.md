@@ -12,6 +12,8 @@ LLM sessions fail in predictable ways. This plugin monitors all sessions and aut
 
 The stream goes silent but the session stays "busy". The UI shows a blinking cursor with no progress. If no events arrive for 48 seconds (`chunkTimeoutMs` + `gracePeriodMs`), the plugin sends `"continue"` with exponential backoff. After 3 failed attempts it gives up.
 
+The `busyStallStrategy` option controls this path: `"continue"` (default), `"abort"` (abort-first), or `"off"` — see [Recovery model](#recovery-model) for what a busy prompt can and cannot do while the runner is live.
+
 The plugin extracts the **agent, model, and provider** from the last session message, so it resumes with the exact same configuration the user was using (build, sisyphus, prometheus, etc.).
 
 _Motivated by:_
@@ -40,7 +42,7 @@ _Motivated by:_
 
 The model generates the same broken output repeatedly. Each `continue` just picks up the broken generation. If a session needs 3+ continues within 10 minutes, the plugin aborts the request and sends `"continue"` fresh, forcing a clean restart.
 
-A separate **tool-call loop detector** also catches the model calling the same tool 3+ consecutive times (or repeating patterns of length 2-5 occurring at least three times). When detected, it emits `TOOL_LOOP_RECOVERY_PROMPT` to break the loop instead of blindly continuing.
+A separate **tool-call loop detector** also catches the model calling the same tool 3+ consecutive times (or repeating patterns of length 2-5 occurring at least three times). When detected, it emits `TOOL_LOOP_RECOVERY_PROMPT` (at most twice per session) to break the loop instead of blindly continuing.
 
 _Motivated by:_
 - [#22142](https://github.com/anomalyco/opencode/issues/22142) — Repetitive tool-call loops with alibaba-coding-plan-cn/qwen3.6-plus
@@ -53,7 +55,7 @@ _Motivated by:_
 
 ### Orphan parent
 
-A subagent finishes but the parent session stays stuck as "busy" forever. The plugin detects when `busyCount` drops from >1 to 1, waits 15 seconds (`subagentWaitMs`), then aborts and resumes the parent.
+A subagent finishes but the parent session stays stuck as "busy" forever. The plugin detects when `busyCount` drops from >1 to 1, waits `subagentWaitMs` + `gracePeriodMs` (18s default), probes the subagent (recovering a crashed child first if possible), then aborts and resumes the parent.
 
 _Motivated by:_
 - [#35066](https://github.com/anomalyco/opencode/issues/35066) — notify parent when subagent sessions finish
@@ -88,7 +90,7 @@ The AI provider's streaming response can fail mid-stream (connection reset, time
 1. **Detection**: `session.error` is classified via `isStreamingFailure()` against the configured error names and message patterns
 2. **State transition**: the session's `pendingRecovery` flag is armed with the error name (`pendingRecoveryReason`) and timestamp (`pendingRecoveryAt`)
 3. **Recovery attempt**: once the session is idle and the backoff delay has elapsed, the timer loop sends a recovery prompt
-4. **Watchdog**: if the session is still not busy 3 seconds after the prompt, the recovery is retried (up to `maxRecoveryRetries`) with exponential backoff
+4. **Watchdog**: if the session is still not busy `toolTextCheckDelayMs` (3s default) after the prompt, the recovery is retried (up to `maxRecoveryRetries`) with exponential backoff
 5. **Escalation**: when retries are exhausted, the plugin aborts the session and resumes it (`abort+resume`); `gaveUp` is set if that also fails
 
 #### Configuration
@@ -128,8 +130,8 @@ See [Recovery Flow Documentation](docs/architecture/recovery-flow.md) for the fu
 5. Session goes idle; timer loop waits until the backoff delay has elapsed
 6. Recovery prompt sent (recoveryAttempts=1)
 7. Success → session busy → recovery flags cleared
-   Still not busy after 3s → watchdog retry (attempt 2/2)
-   Still not busy after 3s → maxRecoveryRetries reached → abort + resume
+   Still not busy after `toolTextCheckDelayMs` (3s default) → watchdog retry (attempt 2/2)
+   Still not busy → maxRecoveryRetries reached → abort + resume
    Abort+continue fails → gaveUp
 ```
 
@@ -148,9 +150,15 @@ _Motivated by:_
 
 ---
 
+### Silent dead-stream recovery
+
+The model stream can die after emitting only reasoning — no text part, no tool call — finalizing with `finish: "unknown"`. OpenCode treats the message as completed and the session goes idle, so no error or stall path triggers. On idle, if the last assistant message has a non-standard finish reason, zero text parts, and at least `silentDeadStreamMinTokens` output tokens, the plugin sends a recovery prompt.
+
+---
+
 ### Active-tool safety guard
 
-Before **any** abort, the plugin calls `checkSessionHasActiveTool()` to verify the session isn't mid-tool-execution. If a tool is running, the abort is skipped. This prevents the plugin from killing a long-running build, test suite, or command — even when it looks like a stall.
+Before **any** abort, two guards run in order: the primary deterministic in-flight counter maintained by the `tool.execute.before`/`tool.execute.after` hooks (`hasInflightTools()`), then a polled `checkSessionHasActiveTool()` fallback for sessions discovered without hooks. If a tool is running, the abort is skipped. This prevents the plugin from killing a long-running build, test suite, or command — even when it looks like a stall.
 
 _Motivated by:_
 - [#26063](https://github.com/anomalyco/opencode/issues/26063) — Tool execution aborted/terminated
@@ -187,6 +195,8 @@ _Motivated by:_
 
 The agent can call the built-in `task_complete` tool to signal that all work is done. When invoked, the plugin stops sending any further `"continue"` prompts, clears all pending timers, and marks the session as complete. This replaces fragile text-based heuristics (emoji patterns, language detection) with a deterministic signal.
 
+If `task_complete` is called while open todos remain, the call is rejected (up to `maxRetries` times) with a message asking the agent to finish the remaining work first.
+
 ---
 
 ### 🎉 emoji completion
@@ -201,9 +211,15 @@ When the assistant prints phrases like "Ready to continue with task" or "Proceed
 
 ---
 
+### Action-intent nudge
+
+When the assistant ends a line with `:` ("Next, I will edit the file:") — announcing intent without acting — the plugin sends `actionIntentPrompt` after a short delay, nudging the model to execute. Disable with `resumeOnActionIntent: false`. Detection is skipped while a session is younger than `warmupMs`.
+
+---
+
 ### Done-claim verification
 
-If the assistant claims the task is done ("task done", "finished", "all complete") but open todos remain, the plugin sends `DONE_WITHOUT_WORK_PROMPT` asking the agent to verify and finish remaining work. This uses the real `todo.updated` event state — not regex on the message text.
+If the assistant claims the task is done ("task done", "finished", "all complete") but open todos remain, the plugin sends `DONE_WITHOUT_WORK_PROMPT` asking the agent to verify and finish remaining work. If it claims done with **no** open todos but the response contains no description of the work, the plugin sends `DONE_WITHOUT_DETAILS_PROMPT` — an imperative prompt demanding a concrete report (files changed, commands run, results). Both use the real `todo.updated` event state — not regex on the message text.
 
 ---
 
@@ -235,6 +251,32 @@ _Motivated by:_
 
 ---
 
+## Recovery model
+
+All recovery paths fall into three families. Which family fires determines what the prompt can actually do.
+
+### 1. Idle-boundary nudges (safe)
+
+Fire only after OpenCode reports the session **idle** — the runner has exited. The prompt starts a new run.
+
+Paths: todo nudges, tool-call-as-text recovery, thinking-tool recovery, action-intent nudge, ready-to-continue, done-claim verification, streaming-failure recovery, silent dead-stream recovery.
+
+### 2. Busy-silence continue (stream stall)
+
+Fires when the session still reports **busy** but no events arrived for `chunkTimeoutMs` + `gracePeriodMs`. Controlled by `busyStallStrategy`:
+
+- `"continue"` (default) — sends a prompt while busy. This only helps when the busy status is **stale** (the runner already exited but the status was never updated); the prompt then starts a new run.
+- `"abort"` — aborts first (`session.abort()`), then sends the prompt. Required to unblock a runner that is genuinely stuck (hung provider stream). Subject to the same active-tool guards as every abort: never fires while a tool is in-flight.
+- `"off"` — disables busy-silence recovery entirely; stalls are then handled only by idle-boundary recovery (if the session ever goes idle) or manually.
+
+**Why `"continue"` cannot unblock a live runner:** in OpenCode ≥ 1.18, `session.prompt()` while the runner is `Running` joins the existing run — the message is admitted to the session inbox and promoted at the next provider-turn boundary. A hung stream never reaches that boundary, so the parked message cannot unblock it; if the run later exits, the message may surface as an unwanted extra turn (token cost, race risk). True transport stalls need abort-first.
+
+### 3. Abort-first recovery
+
+Aborts the active run, then continues. The only family that can unblock a live runner.
+
+Paths: orphan parent, subagent stuck (parent side), hallucination loop, streaming-failure escalation. All aborts pass the active-tool guards first, and plugin-initiated aborts are marked so they are not mistaken for user ESC (`session.error` → `MessageAbortedError` race).
+
 ## Architecture
 
 ```
@@ -244,6 +286,8 @@ Any SSE Event
 
 session.status events:
   ├─ busy → reset timer, clear retry counters
+  ├─ retry → touch session
+  ├─ interrupted → user cancel: back off until the next user message
   └─ idle → schedule tool-text check (3s delay)
               └─ fetch messages → scan for XML / thinking-tool patterns
                   ├─ found → send recovery prompt (with backoff)
@@ -259,11 +303,15 @@ Timer loop (every 5s):
     ├─ orphan watch active? → wait or abort+continue
     ├─ busyCount > 1? → skip (subagent running)
     ├─ active tool running? → skip (never abort tools)
-    └─ idle > 48s? → hallucination loop? abort : continue with backoff
+    └─ idle > 48s? → busyStallStrategy:
+         off → skip · abort → abort+continue
+         else → hallucination loop? abort : continue with backoff
 
 Periodic (every 60s): session.list() to discover missed sessions
 Periodic: cleanup idle sessions older than 10min or >50 entries
 ```
+
+Events consumed: `session.status`, `session.created`, `session.updated`, `session.idle`, `session.interrupted`, `session.error`, `todo.updated`, `command.executed`; hooks: `chat.message`, `tool.execute.before`/`after`, `command.execute.before`.
 
 ## Installation
 
@@ -321,6 +369,19 @@ With options:
 | `streamingFailureErrorNames` | `["ProviderError","APIError","StreamError","ConnectionError","TimeoutError"]` | Error names that classify as streaming failures (exact match) |
 | `streamingFailureMessagePatterns` | `["streaming response failed","stream.*fail","connection.*reset","connection.*closed"]` | Regex patterns (case-insensitive) in error messages indicating streaming failure |
 | `maxRecoveryRetries` | `2` | Max streaming-failure recovery attempts before abort+resume escalation |
+| `toolTextCheckDelayMs` | `3000` | Delay before scanning an idle session for tool-as-text; also the recovery watchdog delay |
+| `minActivityGapMs` | `1000` | Skip recovery if the session was active within this gap |
+| `warmupMs` | `15000` | Action-intent detection disabled while a session is younger than this |
+| `debug` | `false` | Enable `[debug]` console diagnostics |
+| `resumeOnActionIntent` | `true` | Enable action-intent (`:`-terminated line) nudges |
+| `continuePrompt` | `"continue"` | Prompt text for stall/streaming/dead-stream recovery |
+| `actionIntentPrompt` | same as `continuePrompt` | Prompt sent on action-intent detection |
+| `toolTextRecoveryPrompt` | `TOOL_TEXT_RECOVERY_PROMPT` | Override the tool-call-as-text recovery prompt |
+| `thinkingToolRecoveryPrompt` | `THINKING_TOOL_RECOVERY_PROMPT` | Override the thinking-tool recovery prompt |
+| `doneWithoutWorkPrompt` | `DONE_WITHOUT_WORK_PROMPT` | Override the done-claim-with-open-todos prompt |
+| `doneWithoutDetailsPrompt` | `DONE_WITHOUT_DETAILS_PROMPT` | Override the done-claim-with-no-todos report prompt |
+| `silentDeadStreamMinTokens` | `200` | Min output tokens to treat a textless `finish:"unknown"` message as a dead stream |
+| `busyStallStrategy` | `"continue"` | Busy-stall response: `"continue"`, `"abort"` (abort-first), or `"off"` (disabled) |
 
 Message patterns are matched case-insensitively. Error names use exact match.
 
@@ -328,7 +389,6 @@ Message patterns are matched case-insensitively. Error names use exact match.
 
 | Constant | Value | Description |
 |---|---|---|
-| `TOOL_TEXT_CHECK_DELAY_MS` | `3000` | Delay before scanning idle session for tool-as-text |
 | `ABORT_CONTINUE_DELAY_MS` | `2000` | Delay between abort and continue |
 | `MAX_IDLE_SESSIONS` | `50` | Idle session map cap before cleanup |
 | `IDLE_CLEANUP_MS` | `600000` | Idle session age before cleanup (10 min) |

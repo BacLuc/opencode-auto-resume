@@ -470,7 +470,7 @@ describe("Plugin Core Logic", () => {
                 {},
             ]
 
-            const valid = malformed.filter(s => typeof s.id === "string" && s.id)
+            const valid = (malformed as Array<{id?: unknown}>).filter(s => typeof s.id === "string" && s.id)
             expect(valid.length).toBe(0)
         })
 

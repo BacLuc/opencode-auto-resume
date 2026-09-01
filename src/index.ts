@@ -421,6 +421,11 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         (options?.doneWithoutDetailsPrompt as string) ?? DONE_WITHOUT_DETAILS_PROMPT
     const silentDeadStreamMinTokens: number =
         (options?.silentDeadStreamMinTokens as number) ?? DEFAULT_SILENT_DEAD_STREAM_MIN_TOKENS
+    const rawBusyStallStrategy = (options?.busyStallStrategy as string) ?? "continue"
+    const busyStallStrategy: "continue" | "abort" | "off" =
+        rawBusyStallStrategy === "abort" || rawBusyStallStrategy === "off"
+            ? rawBusyStallStrategy
+            : "continue"
     const dbg = (...args: unknown[]) => { if (debug) console.log("[debug]", ...args) }
 
     const sessions = new Map<string, SessionWatch>()
@@ -1730,6 +1735,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
 
                 const idle = now - w.lastActivityAt
                 if (idle >= chunkTimeoutMs + gracePeriodMs) {
+                    if (busyStallStrategy === "off") {
+                        dbg(`Stream stall on ${short(sid)} ignored (busyStallStrategy=off)`)
+                        continue
+                    }
                     // Primary: deterministic in-flight counters from hooks.
                     // A long-running build/test/command must never be aborted.
                     if (hasInflightTools(w)) {
@@ -1742,7 +1751,12 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                             await log("debug", `Session ${short(sid)} has active tool call, skipping stall recovery`)
                             w.lastSubagentCheckAt = now
                         } else if (w.resumeAttempts < maxRetries) {
-                            tryResume(sid, w, "Stream stall")
+                            if (busyStallStrategy === "abort") {
+                                await log("info", `Stream stall on ${short(sid)} (busyStallStrategy=abort): aborting before continue`)
+                                tryAbortAndResume(sid, w)
+                            } else {
+                                tryResume(sid, w, "Stream stall")
+                            }
                         } else if (!w.gaveUp) {
                             w.gaveUp = true
                             dbg(`State transition on ${short(sid)}: gaveUp=false -> true`)

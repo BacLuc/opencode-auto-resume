@@ -174,13 +174,13 @@ describe("Agent validation", () => {
     })
 
     test("handles null agent", () => {
-        const w = { agent: null } as { agent?: string }
+        const w = { agent: null } as unknown as { agent?: string }
         const agent = typeof w.agent === "string" ? w.agent : undefined
         expect(agent).toBe(undefined)
     })
 
     test("handles number agent (edge case)", () => {
-        const w = { agent: 123 } as { agent?: string }
+        const w = { agent: 123 } as unknown as { agent?: string }
         const agent = typeof w.agent === "string" ? w.agent : undefined
         expect(agent).toBe(undefined)
     })

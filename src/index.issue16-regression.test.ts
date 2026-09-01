@@ -112,19 +112,19 @@ describe("Issue #16 regression: behavioral tests", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Register todos
-        await hooks.event({ event: { type: "todo.updated", sessionID: "ses_esc", properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "medium" }] } } })
+        await hooks.event!({ event: { type: "todo.updated", sessionID: "ses_esc", properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "medium" }] } } } as any)
 
         // User presses ESC
-        await hooks.event({ event: { type: "session.interrupted", sessionID: "ses_esc" } })
+        await hooks.event!({ event: { type: "session.interrupted", sessionID: "ses_esc" } } as any)
         await wait(50)
         expect(promptCalls.length).toBe(0)
 
         // Busy event must NOT clear userCancelled
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_esc", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_esc", properties: { status: "busy" } } } as any)
         await wait(20)
 
         // Session goes idle — must NOT resume (ESC sticks)
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_esc", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_esc", properties: { status: "idle" } } } as any)
         await wait(200)
 
         expect(promptCalls.length).toBe(0)
@@ -139,15 +139,15 @@ describe("Issue #16 regression: behavioral tests", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Session A gets ESC
-        await hooks.event({ event: { type: "session.interrupted", sessionID: "ses_a" } })
+        await hooks.event!({ event: { type: "session.interrupted", sessionID: "ses_a" } } as any)
         await wait(30)
 
         // Session B executes a command — must NOT clear session A's userCancelled
-        await hooks.event({ event: { type: "command.executed", sessionID: "ses_b" } })
+        await hooks.event!({ event: { type: "command.executed", sessionID: "ses_b" } } as any)
         await wait(20)
 
         // Session A goes idle — must NOT resume
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_a", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_a", properties: { status: "idle" } } } as any)
         await wait(200)
 
         expect(promptCalls.length).toBe(0)
@@ -162,12 +162,12 @@ describe("Issue #16 regression: behavioral tests", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1, maxRetries: 3 })
 
         // Signal completion via task_complete tool
-        await hooks.event({ event: { type: "todo.updated", sessionID: "ses_stall", properties: { todos: [] } } })
+        await hooks.event!({ event: { type: "todo.updated", sessionID: "ses_stall", properties: { todos: [] } } } as any)
 
         // Simulate completion signal (no todos open, agent finished)
         const w = (hooks as any)
         // Trigger idle
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_stall", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_stall", properties: { status: "idle" } } } as any)
         await wait(200)
 
         // Even with stall, should not resume because completionSignaled or no open todos
@@ -185,7 +185,7 @@ describe("Issue #16 regression: behavioral tests", () => {
         // NO todo.updated event sent — w.todos starts empty
 
         // Session goes idle — lazy fetch should populate w.todos from the API mock
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_lazy", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_lazy", properties: { status: "idle" } } } as any)
         await wait(200)
 
         // The nudge should fire because fetchSessionTodos populated open todos
@@ -201,10 +201,10 @@ describe("Issue #16 regression: behavioral tests", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Open todos set
-        await hooks.event({ event: { type: "todo.updated", sessionID: "ses_emoji", properties: { todos: [{ id: "t1", content: "remaining", status: "pending", priority: "medium" }] } } })
+        await hooks.event!({ event: { type: "todo.updated", sessionID: "ses_emoji", properties: { todos: [{ id: "t1", content: "remaining", status: "pending", priority: "medium" }] } } } as any)
 
         // Idle — 🎉 detected but todos open → false positive → nudge sent
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_emoji", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_emoji", properties: { status: "idle" } } } as any)
         await wait(200)
 
         expect(promptCalls.length).toBeGreaterThanOrEqual(1)
@@ -219,10 +219,10 @@ describe("Issue #16 regression: behavioral tests", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // NO open todos
-        await hooks.event({ event: { type: "todo.updated", sessionID: "ses_done", properties: { todos: [] } } })
+        await hooks.event!({ event: { type: "todo.updated", sessionID: "ses_done", properties: { todos: [] } } } as any)
 
         // Idle — 🎉 with no todos → correctly latches completion
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_done", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_done", properties: { status: "idle" } } } as any)
         await wait(200)
 
         expect(promptCalls.length).toBe(0)

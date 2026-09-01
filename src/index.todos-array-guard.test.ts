@@ -78,9 +78,9 @@ describe("REGRESSION: todo.updated with non-array todos must not crash the plugi
         const { ctx } = createMockContext()
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: { type: "todo.updated", sessionID: "ses_t1", properties: {} },
-        })
+        } as any)
         await wait(50)
     })
 
@@ -88,9 +88,9 @@ describe("REGRESSION: todo.updated with non-array todos must not crash the plugi
         const { ctx } = createMockContext()
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: { type: "todo.updated", sessionID: "ses_t2", properties: { todos: null } },
-        })
+        } as any)
         await wait(50)
     })
 
@@ -98,9 +98,9 @@ describe("REGRESSION: todo.updated with non-array todos must not crash the plugi
         const { ctx } = createMockContext()
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: { type: "todo.updated", sessionID: "ses_t3", properties: { todos: undefined } },
-        })
+        } as any)
         await wait(50)
     })
 
@@ -108,9 +108,9 @@ describe("REGRESSION: todo.updated with non-array todos must not crash the plugi
         const { ctx } = createMockContext()
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: { type: "todo.updated", sessionID: "ses_t4", properties: { todos: { a: 1 } } },
-        })
+        } as any)
         await wait(50)
     })
 
@@ -118,9 +118,9 @@ describe("REGRESSION: todo.updated with non-array todos must not crash the plugi
         const { ctx } = createMockContext()
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: { type: "todo.updated", sessionID: "ses_t5", properties: { todos: "not-an-array" } },
-        })
+        } as any)
         await wait(50)
     })
 
@@ -128,9 +128,9 @@ describe("REGRESSION: todo.updated with non-array todos must not crash the plugi
         const { ctx } = createMockContext()
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: { type: "todo.updated", sessionID: "ses_t6", properties: { todos: 42 } },
-        })
+        } as any)
         await wait(50)
     })
 
@@ -141,17 +141,17 @@ describe("REGRESSION: todo.updated with non-array todos must not crash the plugi
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: { type: "todo.updated", sessionID: "ses_recur", properties: { todos: { poison: true } } },
-        })
+        } as any)
 
         let threw = false
         const onUnhandled = () => { threw = true }
         process.on("unhandledRejection", onUnhandled)
         try {
-            await hooks.event({
+            await hooks.event!({
                 event: { type: "session.status", sessionID: "ses_recur", properties: { status: "idle" } },
-            })
+            } as any)
             await wait(200)
         } finally {
             process.removeListener("unhandledRejection", onUnhandled)
@@ -163,7 +163,7 @@ describe("REGRESSION: todo.updated with non-array todos must not crash the plugi
         const { ctx } = createMockContext()
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_valid",
@@ -174,7 +174,7 @@ describe("REGRESSION: todo.updated with non-array todos must not crash the plugi
                     ],
                 },
             },
-        })
+        } as any)
         await wait(50)
     })
 })

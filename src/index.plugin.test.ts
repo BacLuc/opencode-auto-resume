@@ -147,7 +147,7 @@ describe("Agent Feature", () => {
     })
 
     test("returns undefined when no assistant messages", async () => {
-        const messages = [
+        const messages: Array<{ role: string; content: string; agent?: string }> = [
             { role: "user", content: "Hello" },
         ]
         
@@ -187,10 +187,10 @@ describe("Error Handling", () => {
         )
         
         try {
-            await ctx.client.session.prompt({ 
-                path: { id: "test" }, 
-                body: { parts: [] } 
-            })
+        await (ctx.client.session.prompt as any)({ 
+            path: { id: "test" }, 
+            body: { parts: [] } 
+        })
         } catch (err) {
             expect(err instanceof Error).toBe(true)
             expect((err as Error).message).toBe("Expected 'id' to be a string")
@@ -367,7 +367,7 @@ describe("Continue Lock Prevention", () => {
 
 describe("Idle Flags Reset", () => {
     test("resets only idle-specific flags", () => {
-        const w = {
+        const w: { userCancelled: boolean; aborting: boolean; orphanWatchStartAt: number | null; idleSince: number | null; resumeAttempts: number; continuing: boolean } = {
             userCancelled: true,
             aborting: true,
             orphanWatchStartAt: Date.now(),

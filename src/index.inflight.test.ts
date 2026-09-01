@@ -54,11 +54,11 @@ async function setup(extra: Record<string, unknown> = {}) {
 }
 
 async function busy(hooks: any, sid: string) {
-    await hooks.event({ event: { type: "session.status", sessionID: sid, properties: { status: "busy" } } })
+    await hooks.event!({ event: { type: "session.status", sessionID: sid, properties: { status: "busy" } } })
 }
 
 async function toolBefore(hooks: any, sid: string, callID = "c1", tool = "bash") {
-    await hooks["tool.execute.before"]({ tool, sessionID: sid, callID }, { args: {} })
+    await hooks["tool.execute.before"]!({ tool, sessionID: sid, callID }, { args: {} })
 }
 
 async function toolAfter(hooks: any, sid: string, callID = "c1", tool = "bash") {
@@ -70,7 +70,7 @@ async function cmdBefore(hooks: any, sid: string) {
 }
 
 async function cmdExecuted(hooks: any, sid: string) {
-    await hooks.event({ event: { type: "command.executed", sessionID: sid, properties: { sessionID: sid } } })
+    await hooks.event!({ event: { type: "command.executed", sessionID: sid, properties: { sessionID: sid } } })
 }
 
 describe("deterministic in-flight tool tracking", () => {
@@ -143,7 +143,7 @@ describe("deterministic in-flight tool tracking", () => {
         await busy(hooks, sid)
         await toolBefore(hooks, sid)
         await wait(120)
-        await hooks.event({ event: { type: "session.status", sessionID: sid, properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: sid, properties: { status: "idle" } } } as any)
         await busy(hooks, sid)
         await wait(250)
         expect(promptCalls.filter((p) => p.sid === sid).length).toBeGreaterThanOrEqual(1)
@@ -155,9 +155,9 @@ describe("deterministic in-flight tool tracking", () => {
         await busy(hooks, sid)
         await toolBefore(hooks, sid)
         await wait(120)
-        await hooks.event({
+        await hooks.event!({
             event: { type: "session.error", sessionID: sid, properties: { error: { name: "TimeoutError" } } },
-        })
+        } as any)
         await busy(hooks, sid)
         await wait(250)
         expect(promptCalls.filter((p) => p.sid === sid).length).toBeGreaterThanOrEqual(1)
@@ -169,7 +169,7 @@ describe("deterministic in-flight tool tracking", () => {
         await busy(hooks, sid)
         await toolBefore(hooks, sid)
         await wait(120)
-        await hooks.event({ event: { type: "session.created", sessionID: sid } })
+        await hooks.event!({ event: { type: "session.created", sessionID: sid } } as any)
         await busy(hooks, sid)
         await wait(250)
         expect(promptCalls.filter((p) => p.sid === sid).length).toBeGreaterThanOrEqual(1)
@@ -179,10 +179,10 @@ describe("deterministic in-flight tool tracking", () => {
         const { hooks, abortCalls, promptCalls } = await setup()
         const sid = "ses_noid"
         await busy(hooks, sid)
-        await hooks["tool.execute.before"]({ tool: "bash", sessionID: sid, callID: "" as any }, { args: {} })
+        await hooks["tool.execute.before"]!({ tool: "bash", sessionID: sid, callID: "" as any }, { args: {} })
         await wait(200)
         expect(abortCalls.filter((a) => a.sid === sid)).toHaveLength(0)
-        await hooks["tool.execute.after"]({ tool: "bash", sessionID: sid, callID: "" as any, args: {} }, { title: "", output: "", metadata: {} })
+        await hooks["tool.execute.after"]!({ tool: "bash", sessionID: sid, callID: "" as any, args: {} }, { title: "", output: "", metadata: {} })
         await wait(250)
         expect(promptCalls.filter((p) => p.sid === sid).length).toBeGreaterThanOrEqual(1)
     })

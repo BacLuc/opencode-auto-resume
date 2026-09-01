@@ -251,13 +251,13 @@ describe("idle handler - silent dead stream detection", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_silent",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(1)
@@ -280,13 +280,13 @@ describe("idle handler - silent dead stream detection", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_empty",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(1)
@@ -310,13 +310,13 @@ describe("idle handler - silent dead stream detection", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_text",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(0)
@@ -338,13 +338,13 @@ describe("idle handler - silent dead stream detection", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_low",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(0)
@@ -366,13 +366,13 @@ describe("idle handler - silent dead stream detection", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_threshold",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(1)
@@ -395,13 +395,13 @@ describe("idle handler - silent dead stream detection", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_stop",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         // Function returns any finish reason with no text; threshold check passes
@@ -424,13 +424,13 @@ describe("idle handler - silent dead stream detection", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_nofinish",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(0)
@@ -453,13 +453,13 @@ describe("idle handler - silent dead stream detection", () => {
         // Set threshold to 100, so 150 tokens should trigger recovery
         const hooks = await AutoResumePlugin(ctx, { ...OPTS, silentDeadStreamMinTokens: 100 } as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_custom",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(1)
@@ -484,13 +484,13 @@ describe("idle handler - silent dead stream detection", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_info",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(1)
@@ -515,13 +515,13 @@ describe("idle handler - silent dead stream detection", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_infotokens",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(1)

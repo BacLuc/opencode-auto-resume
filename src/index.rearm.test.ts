@@ -70,15 +70,15 @@ async function setup() {
 }
 
 async function busy(hooks: any, sid: string) {
-    await hooks.event({ event: { type: "session.status", sessionID: sid, properties: { status: "busy" } } })
+    await hooks.event!({ event: { type: "session.status", sessionID: sid, properties: { status: "busy" } } })
 }
 
 async function idle(hooks: any, sid: string) {
-    await hooks.event({ event: { type: "session.status", sessionID: sid, properties: { status: "idle" } } })
+    await hooks.event!({ event: { type: "session.status", sessionID: sid, properties: { status: "idle" } } })
 }
 
 async function interrupted(hooks: any, sid: string) {
-    await hooks.event({ event: { type: "session.interrupted", sessionID: sid } })
+    await hooks.event!({ event: { type: "session.interrupted", sessionID: sid } })
 }
 
 async function userMessage(hooks: any, sid: string) {
@@ -86,7 +86,7 @@ async function userMessage(hooks: any, sid: string) {
 }
 
 async function streamError(hooks: any, sid: string) {
-    await hooks.event({
+    await hooks.event!({
         event: {
             type: "session.error",
             sessionID: sid,
@@ -177,7 +177,7 @@ describe("Re-arm on user message: behavioral tests", () => {
 
         // task_complete latches completionSignaled
         await busy(hooks, sid)
-        await hooks.tool.task_complete.execute({}, { sessionID: sid })
+        await hooks.tool!.task_complete.execute({} as any, { sessionID: sid } as any)
         await idle(hooks, sid)
         await wait(350)
         expect(promptCalls.length).toBe(0)
@@ -194,7 +194,7 @@ describe("Re-arm on user message: behavioral tests", () => {
 
     test("chat.message without sessionID is a no-op", async () => {
         const { hooks, promptCalls } = await setup()
-        await hooks["chat.message"]({}, { message: {}, parts: [] })
+        await hooks["chat.message"]!({} as any, { message: {}, parts: [] } as any)
         await wait(50)
         expect(promptCalls.length).toBe(0)
     })

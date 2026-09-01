@@ -32,7 +32,6 @@ function createMockContext(opts: {
                 })),
                 status: mock(async () => ({ data: statusMap })),
                 todo: mock(async () => ({ data: [] })),
-                todo: mock(async () => ({ data: [] })),
                 messages: mock(async (config: { path: { id: string } }) => {
                     return opts.messages[config.path.id] ?? []
                 }),
@@ -66,11 +65,11 @@ describe("handleEvent - session.created", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({ event: { type: "session.created", sessionID: "ses_new" } })
+        await hooks.event!({ event: { type: "session.created", sessionID: "ses_new" } as any })
 
         // Session should be registered - send another event to verify it doesn't crash
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_new", properties: { status: "busy" } } })
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_new", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_new", properties: { status: "busy" } } as any })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_new", properties: { status: "idle" } } as any })
 
         expect(promptCalls.length).toBe(0) // No continue sent yet
     })
@@ -84,11 +83,11 @@ describe("handleEvent - session.updated", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({ event: { type: "session.updated", sessionID: "ses_test1" } })
+        await hooks.event!({ event: { type: "session.updated", sessionID: "ses_test1" } as any })
 
         // Should be registered - verify by sending status event
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } })
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } as any })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } as any })
 
         expect(promptCalls.length).toBe(0)
     })
@@ -102,13 +101,13 @@ describe("handleEvent - session.status", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } as any })
 
         // Give it a moment to process
         await wait(10)
 
         // Session should exist and have proper watch
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } as any })
     })
 
     test("status 'idle' + open todos + busyCount===0 → continue sent", async () => {
@@ -119,16 +118,16 @@ describe("handleEvent - session.status", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Set up open todos
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_test1",
                 properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "high" }] }
-            }
+            } as any
         })
 
         // Send idle event
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } as any })
 
         // Wait for the check to happen
         await wait(100)
@@ -145,7 +144,7 @@ describe("handleEvent - session.status", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "retry" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "retry" } } as any })
 
         await wait(50)
 
@@ -159,7 +158,7 @@ describe("handleEvent - session.status", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "interrupted" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "interrupted" } } as any })
 
         await wait(600)
 
@@ -173,7 +172,7 @@ describe("handleEvent - session.status", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: { type: "busy" } } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: { type: "busy" } } } as any })
 
         await wait(50)
 
@@ -187,7 +186,7 @@ describe("handleEvent - session.status", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "unknown" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "unknown" } } as any })
 
         await wait(50)
 
@@ -203,7 +202,7 @@ describe("handleEvent - session.idle", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({ event: { type: "session.idle", sessionID: "ses_test1" } })
+        await hooks.event!({ event: { type: "session.idle", sessionID: "ses_test1" } as any })
 
         await wait(100)
 
@@ -220,7 +219,7 @@ describe("handleEvent - session.interrupted", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({ event: { type: "session.interrupted", sessionID: "ses_test1" } })
+        await hooks.event!({ event: { type: "session.interrupted", sessionID: "ses_test1" } as any })
 
         await wait(600)
 
@@ -239,22 +238,22 @@ describe("handleEvent - session.interrupted", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } as any })
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_test1",
                 properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "high" }] }
-            }
+            } as any
         })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } as any })
 
         await wait(150)
         expect(promptCalls.length).toBe(1)
 
-        await hooks.event({ event: { type: "session.interrupted", sessionID: "ses_test1" } })
+        await hooks.event!({ event: { type: "session.interrupted", sessionID: "ses_test1" } as any })
 
         await wait(200)
 
@@ -268,18 +267,18 @@ describe("handleEvent - session.interrupted", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_test1",
                 properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "high" }] }
-            }
+            } as any
         })
 
-        await hooks.event({ event: { type: "session.interrupted", sessionID: "ses_test1" } })
+        await hooks.event!({ event: { type: "session.interrupted", sessionID: "ses_test1" } as any })
         await wait(100)
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } as any })
         await wait(200)
 
         expect(promptCalls.length).toBe(0)
@@ -292,23 +291,23 @@ describe("handleEvent - session.interrupted", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_test1",
                 properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "high" }] }
-            }
+            } as any
         })
 
-        await hooks.event({ event: { type: "session.interrupted", sessionID: "ses_test1" } })
+        await hooks.event!({ event: { type: "session.interrupted", sessionID: "ses_test1" } as any })
         await wait(100)
         expect(promptCalls.length).toBe(0)
 
         // busy event must NOT clear userCancelled (the bug was: plugin's own resume triggers busy → clears ESC)
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } as any })
         await wait(50)
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } as any })
         await wait(200)
 
         expect(promptCalls.length).toBe(0)  // ESC sticks — no resume after interrupt
@@ -323,12 +322,12 @@ describe("handleEvent - session.error", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.error",
                 sessionID: "ses_test1",
                 properties: { error: { name: "MessageAbortedError" } }
-            }
+            } as any
         })
 
         await wait(50)
@@ -344,12 +343,12 @@ describe("handleEvent - session.error", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.error",
                 sessionID: "ses_test1",
                 properties: { error: { name: "ProviderError", data: { message: "rate limited" } } }
-            }
+            } as any
         })
 
         await wait(50)
@@ -364,12 +363,12 @@ describe("handleEvent - session.error", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.error",
                 sessionID: "ses_test1",
                 properties: { error: { name: "ProviderError", data: { message: "rate limited" } } }
-            }
+            } as any
         })
 
         await wait(50)
@@ -387,12 +386,12 @@ describe("handleEvent - session.error", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Session is already idle (race condition: idle arrived before error)
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.error",
                 sessionID: "ses_test1",
                 properties: { error: { name: "MessageAbortedError" } }
-            }
+            } as any
         })
 
         await wait(50)
@@ -401,7 +400,7 @@ describe("handleEvent - session.error", () => {
         expect(promptCalls.length).toBe(0)
 
         // Subsequent idle event should NOT trigger continue (userCancelled persists)
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } as any })
         await wait(100)
 
         expect(promptCalls.length).toBe(0)
@@ -418,7 +417,7 @@ describe("handleEvent - session.error", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Set up session as busy and register it
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } as any })
         await wait(10)
 
         // Simulate plugin abort in flight by manually triggering abort
@@ -429,12 +428,12 @@ describe("handleEvent - session.error", () => {
         // MessageAbortedError arrives during plugin abort
         // Note: We cannot directly set pluginAbortInFlight in tests as it's internal,
         // but we can verify the behavior by checking that abort+continue completes
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.error",
                 sessionID: "ses_test1",
                 properties: { error: { name: "MessageAbortedError" } }
-            }
+            } as any
         })
 
         await wait(100)
@@ -457,24 +456,24 @@ describe("handleEvent - session.error", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // First MessageAbortedError → userCancelled set
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.error",
                 sessionID: "ses_test1",
                 properties: { error: { name: "MessageAbortedError" } }
-            }
+            } as any
         })
         await wait(50)
 
         expect(promptCalls.length).toBe(0)
 
         // Second MessageAbortedError → should not crash, should still respect userCancelled
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.error",
                 sessionID: "ses_test1",
                 properties: { error: { name: "MessageAbortedError" } }
-            }
+            } as any
         })
         await wait(50)
 
@@ -490,32 +489,32 @@ describe("handleEvent - session.error", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Set up open todos to enable continue
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_test1",
                 properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "high" }] }
-            }
+            } as any
         })
 
         // MessageAbortedError on idle session → userCancelled set
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.error",
                 sessionID: "ses_test1",
                 properties: { error: { name: "MessageAbortedError" } }
-            }
+            } as any
         })
         await wait(50)
 
         expect(promptCalls.length).toBe(0)
 
         // Busy event must NOT clear userCancelled (the bug was: plugin's busy event clears ESC)
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } as any })
         await wait(50)
 
         // Even after busy, idle should NOT trigger continue
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } as any })
         await wait(100)
 
         expect(promptCalls.length).toBe(0) // ESC sticks — no resume after user abort
@@ -531,10 +530,10 @@ describe("handleEvent - command.executed", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Set up busy session
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } as any })
 
         // Execute command
-        await hooks.event({ event: { type: "command.executed" } })
+        await hooks.event!({ event: { type: "command.executed" } as any })
 
         await wait(50)
 
@@ -552,16 +551,16 @@ describe("handleEvent - todo.updated", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Set up open todos
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_test1",
                 properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "high" }] }
-            }
+            } as any
         })
 
         // Send idle event
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } as any })
 
         await wait(100)
 
@@ -577,16 +576,16 @@ describe("handleEvent - todo.updated", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Set up empty todos
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_test1",
                 properties: { todos: [] }
-            }
+            } as any
         })
 
         // Send idle event
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "idle" } } as any })
 
         await wait(100)
 
@@ -606,11 +605,11 @@ describe("handleEvent - orphan watch trigger", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Both sessions already busy in mock, but we need to send events to register them
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } })
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } as any })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "busy" } } as any })
 
         // One goes idle - should trigger orphan watch on parent
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "idle" } } as any })
 
         await wait(50)
 
@@ -629,15 +628,15 @@ describe("task_complete tool", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // First register the session
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } as any })
 
         // Call task_complete on parent
-        const result = await hooks.tool["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
+        const result = await hooks.tool!["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
 
         expect(result).toContain("Task completion acknowledged")
 
         // Send idle - should NOT trigger continue because toolTextRecovered is true
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "idle" } } as any })
 
         await wait(100)
 
@@ -655,20 +654,20 @@ describe("task_complete tool", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Register both sessions
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } })
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } as any })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "busy" } } as any })
 
         // Sub goes idle
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "idle" } } as any })
         await wait(50)
 
         // Call task_complete on subagent
-        const result = await hooks.tool["task_complete"].execute({}, { sessionID: "ses_sub" } as any)
+        const result = await hooks.tool!["task_complete"].execute({}, { sessionID: "ses_sub" } as any)
 
         expect(result).toContain("Task completion acknowledged")
 
         // Send idle again on subagent - should NOT trigger continue because completionSignaled is now set
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_sub", properties: { status: "idle" } } as any })
         await wait(100)
 
         // No continue should have been sent to the subagent
@@ -683,7 +682,7 @@ describe("task_complete tool", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Call task_complete on non-existent session
-        const result = await hooks.tool["task_complete"].execute({}, { sessionID: "ses_unknown" } as any)
+        const result = await hooks.tool!["task_complete"].execute({}, { sessionID: "ses_unknown" } as any)
 
         expect(result).toContain("Task completion acknowledged")
     })
@@ -695,10 +694,10 @@ describe("task_complete tool", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1, maxRetries: 3 })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } as any })
 
         // Set up open todos
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_parent",
@@ -706,17 +705,17 @@ describe("task_complete tool", () => {
                     { id: "t1", content: "task A", status: "pending", priority: "medium" },
                     { id: "t2", content: "task B", status: "in_progress", priority: "high" },
                 ] }
-            }
+            } as any
         })
 
         // Call task_complete — should be blocked
-        const result = await hooks.tool["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
+        const result = await hooks.tool!["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
 
         expect(result).toContain("unfinished task")
         expect(result).not.toContain("Task completion acknowledged")
 
         // Send idle — since completionSignaled was NOT set, the idle handler should send a reminder
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "idle" } } as any })
         await wait(100)
 
         expect(promptCalls.length).toBeGreaterThan(0)
@@ -729,26 +728,26 @@ describe("task_complete tool", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1, maxRetries: 1 })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } as any })
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_parent",
                 properties: { todos: [{ id: "t1", content: "task A", status: "pending", priority: "medium" }] }
-            }
+            } as any
         })
 
         // First call — blocked (override 1/1)
-        const result1 = await hooks.tool["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
+        const result1 = await hooks.tool!["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
         expect(result1).toContain("unfinished task")
 
         // Second call — maxRetries reached, completion accepted
-        const result2 = await hooks.tool["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
+        const result2 = await hooks.tool!["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
         expect(result2).toContain("Task completion acknowledged")
 
         // Send idle — should NOT trigger continue because completionSignaled is now true
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "idle" } } as any })
         await wait(100)
 
         expect(promptCalls.length).toBe(0)
@@ -761,29 +760,29 @@ describe("task_complete tool", () => {
         })
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1, maxRetries: 2 })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } as any })
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_parent",
                 properties: { todos: [{ id: "t1", content: "task A", status: "pending", priority: "medium" }] }
-            }
+            } as any
         })
 
         // First call — blocked (override 1/2)
-        const result1 = await hooks.tool["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
+        const result1 = await hooks.tool!["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
         expect(result1).toContain("unfinished task")
 
         // Session goes busy (agent responds to reminder) — resetSessionFlags called
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_parent", properties: { status: "busy" } } as any })
 
         // Second call — should still be blocked (override 2/2), counter persisted
-        const result2 = await hooks.tool["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
+        const result2 = await hooks.tool!["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
         expect(result2).toContain("unfinished task")
 
         // Third call — maxRetries reached, completion accepted
-        const result3 = await hooks.tool["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
+        const result3 = await hooks.tool!["task_complete"].execute({}, { sessionID: "ses_parent" } as any)
         expect(result3).toContain("Task completion acknowledged")
     })
 })
@@ -797,32 +796,32 @@ describe("done-claim text detection (no tool call)", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1, maxRetries: 2, toolTextCheckDelayMs: 1, minActivityGapMs: 0 })
 
         // Set open todos
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_persist",
                 properties: { todos: [{ id: "t1", content: "task A", status: "pending", priority: "medium" }] }
-            }
+            } as any
         })
 
         // First idle → reminder sent (nudge 1)
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "idle" } } as any })
         await wait(100)
         expect(promptCalls.length).toBeGreaterThanOrEqual(1)
 
         // Session goes busy → resetBusyFlags now resets todoNudgeAttempts to 0
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "busy" } } as any })
         await wait(50)
 
         // Second idle → fresh nudge budget, reminder sent again
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "idle" } } as any })
         await wait(100)
         expect(promptCalls.length).toBeGreaterThanOrEqual(2)
 
         // Another busy→idle cycle — counter resets again
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "busy" } } as any })
         await wait(50)
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_persist", properties: { status: "idle" } } as any })
         await wait(100)
 
         // Counter reset on busy, so nudge 3 fires (previously was blocked at 2)
@@ -850,16 +849,16 @@ describe("done-claim text detection (no tool call)", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1, maxRetries: 3, toolTextCheckDelayMs: 1, minActivityGapMs: 0 })
 
         // No open todos (empty todo list)
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_notodos",
                 properties: { todos: [] }
-            }
+            } as any
         })
 
         // Session goes idle → after delay, checkForToolCallAsText runs
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_notodos", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_notodos", properties: { status: "idle" } } as any })
         await wait(50)
 
         // Should have sent the DONE_WITHOUT_WORK_PROMPT
@@ -889,30 +888,30 @@ describe("done-claim text detection (no tool call)", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1, maxRetries: 2, toolTextCheckDelayMs: 1, minActivityGapMs: 0 })
 
         // No open todos
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "todo.updated",
                 sessionID: "ses_cap",
                 properties: { todos: [] }
-            }
+            } as any
         })
 
         // First idle → prompt sent (attempt 1/2)
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "idle" } } as any })
         await wait(100)
         expect(promptCalls.length).toBe(1)
 
         // Busy resets the counter (fresh budget)
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "busy" } } as any })
         await wait(50)
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "idle" } } as any })
         await wait(100)
         expect(promptCalls.length).toBe(2)
 
         // Busy resets again → another prompt (counter is fresh each cycle now)
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "busy" } } as any })
         await wait(50)
-        await hooks.event({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "ses_cap", properties: { status: "idle" } } as any })
         await wait(100)
         expect(promptCalls.length).toBe(3)
     })
@@ -927,7 +926,7 @@ describe("handleEvent - edge cases", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Send event without sessionID
-        await hooks.event({ event: { type: "session.status", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", properties: { status: "idle" } } as any })
 
         await wait(50)
 
@@ -942,7 +941,7 @@ describe("handleEvent - edge cases", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
 
         // Send event with invalid sessionID
-        await hooks.event({ event: { type: "session.status", sessionID: "invalid_id", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "invalid_id", properties: { status: "idle" } } as any })
 
         await wait(50)
 

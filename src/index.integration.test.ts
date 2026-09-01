@@ -126,7 +126,7 @@ describe("Plugin Integration", () => {
         const { ctx } = createRealisticContext()
         const hooks = await AutoResumePlugin(ctx, { enabled: true })
 
-        await hooks.config()
+        await (hooks.config as any)()
 
         // Config should complete without errors
         expect(true).toBe(true)
@@ -136,7 +136,17 @@ describe("Plugin Integration", () => {
         const { ctx } = createRealisticContext()
         const hooks = await AutoResumePlugin(ctx, { enabled: true })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "session-1", properties: { status: "idle" } } })
+        await (hooks.config as any)()
+
+        // Config should complete without errors
+        expect(true).toBe(true)
+    })
+
+    test("event hook processes session.status", async () => {
+        const { ctx } = createRealisticContext()
+        const hooks = await AutoResumePlugin(ctx, { enabled: true })
+
+        await hooks.event!({ event: { type: "session.status", sessionID: "session-1", properties: { status: "idle" } } } as any)
 
         // Should not throw
     })
@@ -145,23 +155,23 @@ describe("Plugin Integration", () => {
         const { ctx } = createRealisticContext()
         const hooks = await AutoResumePlugin(ctx, { enabled: true })
 
-        await hooks.event({ event: { type: "session.error", sessionID: "session-1", properties: { error: "test error" } } })
+        await hooks.event!({ event: { type: "session.error", sessionID: "session-1", properties: { error: "test error" } } } as any)
     })
 
     test("event hook processes message delta", async () => {
         const { ctx } = createRealisticContext()
         const hooks = await AutoResumePlugin(ctx, { enabled: true })
 
-        await hooks.event({ event: { type: "message", sessionID: "session-1", properties: { delta: { text: "hello" } } } })
+        await hooks.event!({ event: { type: "message", sessionID: "session-1", properties: { delta: { text: "hello" } } } } as any)
     })
 
     test("multiple events processed sequentially", async () => {
         const { ctx } = createRealisticContext()
         const hooks = await AutoResumePlugin(ctx, { enabled: true })
 
-        await hooks.event({ event: { type: "session.status", sessionID: "session-1", properties: { status: "busy" } } })
-        await hooks.event({ event: { type: "message", sessionID: "session-1", properties: { delta: { text: "working" } } } })
-        await hooks.event({ event: { type: "session.status", sessionID: "session-1", properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: "session-1", properties: { status: "busy" } } } as any)
+        await hooks.event!({ event: { type: "message", sessionID: "session-1", properties: { delta: { text: "working" } } } } as any)
+        await hooks.event!({ event: { type: "session.status", sessionID: "session-1", properties: { status: "idle" } } } as any)
     })
 
     test("string idle status schedules tool-text recovery", async () => {
@@ -208,7 +218,7 @@ describe("Plugin Integration", () => {
         } as any
         const hooks = await AutoResumePlugin(ctx, { enabled: true, maxRetries: 1 })
 
-        await hooks.event({ event: { type: "session.status", sessionID: sid, properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: sid, properties: { status: "idle" } } } as any)
         await new Promise((resolve) => setTimeout(resolve, 3200))
 
         expect(ctx.client.session.messages).toHaveBeenCalled()
@@ -249,8 +259,8 @@ describe("Plugin Integration", () => {
             maxRetries: 3,
         })
 
-        await hooks.event({ event: { type: "session.status", sessionID: sid, properties: { status: "busy" } } } as any)
-        await hooks.event({ event: { type: "message", sessionID: sid, properties: { delta: { text: "x" } } } } as any)
+        await hooks.event!({ event: { type: "session.status", sessionID: sid, properties: { status: "busy" } } } as any)
+        await hooks.event!({ event: { type: "message", sessionID: sid, properties: { delta: { text: "x" } } } } as any)
 
         await new Promise((resolve) => setTimeout(resolve, 300))
 
@@ -298,8 +308,8 @@ describe("Plugin Integration", () => {
             maxRetries: 3,
         })
 
-        await hooks.event({ event: { type: "session.status", sessionID: sid, properties: { status: "busy" } } } as any)
-        await hooks.event({ event: { type: "message", sessionID: sid, properties: { delta: { text: "x" } } } } as any)
+        await hooks.event!({ event: { type: "session.status", sessionID: sid, properties: { status: "busy" } } } as any)
+        await hooks.event!({ event: { type: "message", sessionID: sid, properties: { delta: { text: "x" } } } } as any)
 
         await new Promise((resolve) => setTimeout(resolve, 300))
 
@@ -339,9 +349,9 @@ describe("Plugin Integration", () => {
         })
 
         // Two sessions busy, then subagent goes idle → triggers orphan watch on parent
-        await hooks.event({ event: { type: "session.status", sessionID: parentSid, properties: { status: "busy" } } } as any)
-        await hooks.event({ event: { type: "session.status", sessionID: subagentSid, properties: { status: "busy" } } } as any)
-        await hooks.event({ event: { type: "session.status", sessionID: subagentSid, properties: { status: "idle" } } } as any)
+        await hooks.event!({ event: { type: "session.status", sessionID: parentSid, properties: { status: "busy" } } } as any)
+        await hooks.event!({ event: { type: "session.status", sessionID: subagentSid, properties: { status: "busy" } } } as any)
+        await hooks.event!({ event: { type: "session.status", sessionID: subagentSid, properties: { status: "idle" } } } as any)
 
         // Wait for orphan watch to fire (subagentWaitMs + gracePeriodMs + checkIntervalMs)
         await new Promise((resolve) => setTimeout(resolve, 400))
@@ -438,22 +448,22 @@ describe("Integration: Continue Lock Prevention", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true })
 
         // Simulate first continue prompt
-        await hooks.event({ 
+        await hooks.event!({ 
             event: { 
                 type: "session.status", 
                 sessionID: "session-1", 
                 properties: { status: "idle" } 
             } 
-        })
+        } as any)
 
         // Simulate timer firing again before first continue completes
-        await hooks.event({ 
+        await hooks.event!({ 
             event: { 
                 type: "session.status", 
                 sessionID: "session-1", 
                 properties: { status: "idle" } 
             } 
-        })
+        } as any)
 
         // Should have only 1 prompt call due to lock
         // Note: This test verifies the lock exists in the implementation
@@ -465,31 +475,31 @@ describe("Integration: Continue Lock Prevention", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true })
 
         // First idle event
-        await hooks.event({ 
+        await hooks.event!({ 
             event: { 
                 type: "session.status", 
                 sessionID: "session-1", 
                 properties: { status: "idle" } 
             } 
-        })
+        } as any)
 
         // User activity (busy status)
-        await hooks.event({ 
+        await hooks.event!({ 
             event: { 
                 type: "session.status", 
                 sessionID: "session-1", 
                 properties: { status: "busy" } 
             } 
-        })
+        } as any)
 
         // Another idle event should be allowed
-        await hooks.event({ 
+        await hooks.event!({ 
             event: { 
                 type: "session.status", 
                 sessionID: "session-1", 
                 properties: { status: "idle" } 
             } 
-        })
+        } as any)
 
         // Should process both idle events
         expect(promptCalls.length).toBeGreaterThanOrEqual(0)
@@ -500,22 +510,22 @@ describe("Integration: Continue Lock Prevention", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true })
 
         // Session 1 goes idle
-        await hooks.event({ 
+        await hooks.event!({ 
             event: { 
                 type: "session.status", 
                 sessionID: "session-1", 
                 properties: { status: "idle" } 
             } 
-        })
+        } as any)
 
         // Session 2 goes idle
-        await hooks.event({ 
+        await hooks.event!({ 
             event: { 
                 type: "session.status", 
                 sessionID: "session-2", 
                 properties: { status: "idle" } 
             } 
-        })
+        } as any)
 
         // Each session should be tracked independently
         expect(promptCalls.length).toBeGreaterThanOrEqual(0)
@@ -528,31 +538,31 @@ describe("Integration: Realistic Scenarios", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true })
 
         // Session becomes idle (stalled)
-        await hooks.event({ 
+        await hooks.event!({ 
             event: { 
                 type: "session.status", 
                 sessionID: "session-1", 
                 properties: { status: "idle" } 
             } 
-        })
+        } as any)
 
         // User intervenes (becomes busy)
-        await hooks.event({ 
+        await hooks.event!({ 
             event: { 
                 type: "session.status", 
                 sessionID: "session-1", 
                 properties: { status: "busy" } 
             } 
-        })
+        } as any)
 
         // Activity continues
-        await hooks.event({ 
+        await hooks.event!({ 
             event: { 
                 type: "message", 
                 sessionID: "session-1", 
                 properties: { delta: { text: "working on it" } } 
             } 
-        })
+        } as any)
 
         // No errors should occur
         expect(promptCalls.length).toBeGreaterThanOrEqual(0)
@@ -563,18 +573,10 @@ describe("Integration: Realistic Scenarios", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true })
 
         // Rapid state changes
-        await hooks.event({ 
-            event: { type: "session.status", sessionID: "session-1", properties: { status: "busy" } }
-        })
-        await hooks.event({ 
-            event: { type: "session.status", sessionID: "session-1", properties: { status: "idle" } }
-        })
-        await hooks.event({ 
-            event: { type: "session.status", sessionID: "session-1", properties: { status: "busy" } }
-        })
-        await hooks.event({ 
-            event: { type: "session.status", sessionID: "session-1", properties: { status: "idle" } }
-        })
+        await hooks.event!({ event: { type: "session.status", sessionID: "session-1", properties: { status: "busy" } } } as any)
+        await hooks.event!({ event: { type: "session.status", sessionID: "session-1", properties: { status: "idle" } } } as any)
+        await hooks.event!({ event: { type: "session.status", sessionID: "session-1", properties: { status: "busy" } } } as any)
+        await hooks.event!({ event: { type: "session.status", sessionID: "session-1", properties: { status: "idle" } } } as any)
 
         // Should handle all events without crashing
         expect(promptCalls.length).toBeGreaterThanOrEqual(0)
@@ -585,13 +587,13 @@ describe("Integration: Realistic Scenarios", () => {
         const hooks = await AutoResumePlugin(ctx, { enabled: true })
 
         // Session error
-        await hooks.event({ 
+        await hooks.event!({ 
             event: { 
                 type: "session.error", 
                 sessionID: "session-1", 
                 properties: { error: "Network timeout" } 
             } 
-        })
+        } as any)
 
         // Should not throw
         expect(promptCalls.length).toBeGreaterThanOrEqual(0)
@@ -670,7 +672,7 @@ describe("Hallucination Guard Regression Tests (MT1 + MT2)", () => {
         })
 
         // Session goes idle with tool-call-as-text in messages.
-        await hooks.event({ event: { type: "session.status", sessionID: sid, properties: { status: "idle" } } } as any)
+        await hooks.event!({ event: { type: "session.status", sessionID: sid, properties: { status: "idle" } } } as any)
 
         // Wait for checkForToolCallAsText timer (default toolTextCheckDelayMs = 3000ms).
         await new Promise((resolve) => setTimeout(resolve, 3200))
@@ -741,17 +743,17 @@ describe("Hallucination Guard Regression Tests (MT1 + MT2)", () => {
 
         // Create the target session watch first — todo.updated uses
         // sessions.get() (not ensureWatch), so the watch must already exist.
-        await hooks.event({ event: { type: "session.created", sessionID: targetSid } } as any)
+        await hooks.event!({ event: { type: "session.created", sessionID: targetSid } } as any)
 
         // Set up open todos on target so the idle handler calls tryResume.
         // currentBusy must be 0 (no other busy sessions) for the idle
         // handler to call tryResume — a continue is only sent when no
         // subagents are running.
-        await hooks.event({ event: { type: "todo.updated", sessionID: targetSid, properties: { todos: [{ content: "task", status: "pending" }] } } } as any)
+        await hooks.event!({ event: { type: "todo.updated", sessionID: targetSid, properties: { todos: [{ content: "task", status: "pending" }] } } } as any)
 
         // Target goes idle → tryResume called (fire-and-forget, not awaited).
         // currentBusy === 0 because no other sessions are busy.
-        await hooks.event({ event: { type: "session.status", sessionID: targetSid, properties: { status: "idle" } } } as any)
+        await hooks.event!({ event: { type: "session.status", sessionID: targetSid, properties: { status: "idle" } } } as any)
 
         // Wait for the tryResume async chain to reach tryAbortAndResume and
         // call abort. The chain is: tryResume → isHallucinationLoop (sync, true)

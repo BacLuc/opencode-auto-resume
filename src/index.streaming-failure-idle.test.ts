@@ -197,13 +197,13 @@ describe("idle handler - streaming failure detection on message.error", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_503",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(1)
@@ -232,13 +232,13 @@ describe("idle handler - streaming failure detection on message.error", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_info",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(1)
@@ -272,13 +272,13 @@ describe("idle handler - streaming failure detection on message.error", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_retry",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(1)
@@ -299,13 +299,13 @@ describe("idle handler - streaming failure detection on message.error", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_abort",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(0)
@@ -328,13 +328,13 @@ describe("idle handler - streaming failure detection on message.error", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_other",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(0)
@@ -355,13 +355,13 @@ describe("idle handler - streaming failure detection on message.error", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_clean",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         expect(promptCalls.length).toBe(0)
@@ -378,22 +378,22 @@ describe("idle handler - streaming failure detection on message.error", () => {
         })
         const hooks = await AutoResumePlugin(ctx, OPTS as any)
 
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_dup",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(30)
         // Second idle event while first recovery is still in flight.
-        await hooks.event({
+        await hooks.event!({
             event: {
                 type: "session.status",
                 sessionID: "ses_dup",
                 properties: { status: "idle" },
             },
-        })
+        } as any)
         await wait(50)
 
         // Exactly one resume — tryResume's continuing/backoff guards prevent dup.

@@ -82,25 +82,25 @@ async function setup(extra: Record<string, unknown> = {}, mockOpts: { failFirstP
 }
 
 async function busy(hooks: any, sid: string) {
-    await hooks.event({ event: { type: "session.status", sessionID: sid, properties: { status: "busy" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: sid, properties: { status: "busy" } } } as any)
 }
 
 async function idle(hooks: any, sid: string) {
-    await hooks.event({ event: { type: "session.status", sessionID: sid, properties: { status: "idle" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: sid, properties: { status: "idle" } } } as any)
 }
 
 async function interrupted(hooks: any, sid: string) {
-    await hooks.event({ event: { type: "session.status", sessionID: sid, properties: { status: "interrupted" } } })
+        await hooks.event!({ event: { type: "session.status", sessionID: sid, properties: { status: "interrupted" } } } as any)
 }
 
 async function streamError(hooks: any, sid: string) {
-    await hooks.event({
+        await hooks.event!({
         event: {
             type: "session.error",
             sessionID: sid,
             properties: { error: { name: "ProviderError", data: { message: "stream failed" } } },
         },
-    })
+    } as any)
 }
 
 function triggeredLogs(logCalls: LogCall[]): LogCall[] {
@@ -299,7 +299,7 @@ describe("Pending recovery timer loop", () => {
             await busy(hooks, sid)
             await streamError(hooks, sid)
             await idle(hooks, sid)
-            await hooks.event({ event: { type: "command.executed", sessionID: sid, properties: { sessionID: sid } } } as any)
+            await hooks.event!({ event: { type: "command.executed", sessionID: sid, properties: { sessionID: sid } } } as any)
             await wait(350)
             expect(promptCalls.length).toBe(0)
             expect(triggeredLogs(logCalls).length).toBe(0)
