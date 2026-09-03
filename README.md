@@ -152,7 +152,7 @@ _Motivated by:_
 
 ### Silent dead-stream recovery
 
-The model stream can die after emitting only reasoning — no text part, no tool call — finalizing with `finish: "unknown"`. OpenCode treats the message as completed and the session goes idle, so no error or stall path triggers. On idle, if the last assistant message has a non-standard finish reason, zero text parts, and at least `silentDeadStreamMinTokens` output tokens, the plugin sends a recovery prompt.
+The model stream can die after emitting only reasoning — no text part, no tool call — finalizing with `finish: "unknown"`. OpenCode treats the message as completed and the session goes idle, so no error or stall path triggers. On idle, if the **newest** assistant message has a finish reason, zero text parts, and at least `silentDeadStreamMinTokens` output tokens, the plugin sends a recovery prompt. Only the newest assistant message is evaluated — a delivered text answer means normal completion, and older tool-call steps are never misread as dead streams. Recovery is also skipped if the session has gone busy/retry again before the prompt is sent (race guard).
 
 ---
 
@@ -180,7 +180,7 @@ _Motivated by:_
 
 ### ESC cancel respected
 
-User presses ESC to cancel a request. The plugin detects `MessageAbortedError` and marks all busy sessions as cancelled, never resuming them. The grace period (`gracePeriodMs`) also lets late ESC/status events arrive before any action.
+User presses ESC to cancel a request. The plugin detects `MessageAbortedError` and marks sessions as cancelled — regardless of their tracked status, so a late status flip to idle before the error cannot miss the latch — and never resumes them. Aborts initiated by the plugin itself (`pluginAbortInFlight`) are excluded, so recovery aborts are not mistaken for ESC. The grace period (`gracePeriodMs`) also lets late ESC/status events arrive before any action.
 
 The back-off lifts as soon as the user sends a new prompt in that session (`chat.message` hook): a fresh user message starts a new round of work, so auto-resume re-arms. The plugin's own recovery prompts do not re-arm it. The same applies to the `task_complete` latch.
 

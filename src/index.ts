@@ -286,10 +286,11 @@ function getLastAssistantError(
 }
 
 /**
- * Detects a silent dead stream: message finished with a non-terminal finish reason
+ * Detects a silent dead stream: the NEWEST assistant message has a finish reason
  * but emitted no text parts (only reasoning or no parts at all). This can happen when
- * the model stream dies mid-response. Returns the finish reason and output token count
- * if detected, null otherwise.
+ * the model stream dies mid-response. Only the newest assistant message is evaluated:
+ * if it has text, the session completed normally and null is returned — never walk
+ * back past a delivered answer to an intermediate tool-call step.
  */
 function getLastSilentDeadStream(
     messages: Array<Record<string, unknown>>,
@@ -311,7 +312,7 @@ function getLastSilentDeadStream(
             const t = p as Record<string, unknown>
             return t.type === "text" && typeof t.text === "string" && t.text.length > 0
         })
-        if (hasText) continue
+        if (hasText) return null
 
         const tokens = msg.tokens as Record<string, unknown> | undefined
         const tInfo = info?.tokens as Record<string, unknown> | undefined
@@ -1957,7 +1958,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                                 )
                             }
 
-                            // Silent dead stream: finish="unknown" with no text parts
+                            // Silent dead stream: the newest assistant message has a
+                            // finish reason but no text parts (e.g. reasoning-only,
+                            // finish=unknown). A delivered text answer means the session
+                            // completed normally — no recovery.
                             try {
                                 const dead = getLastSilentDeadStream(
                                     await getSessionMessages(sid),
@@ -1966,19 +1970,34 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                                     dead &&
                                     dead.outputTokens >= silentDeadStreamMinTokens
                                 ) {
-                                    w.pendingRecovery = true
-                                    w.pendingRecoveryReason = `silent-${dead.finish}`
-                                    w.pendingRecoveryAt = Date.now()
-                                    await log(
-                                        "info",
-                                        `${short(sid)} - silent dead stream: finish=${dead.finish}, ${dead.outputTokens} output tokens, no text parts; resuming`,
-                                    )
-                                    await tryResume(
-                                        sid,
-                                        w,
-                                        `Silent dead stream (${dead.finish})`,
-                                        continuePrompt,
-                                    )
+                                    let busyAgain = false
+                                    try {
+                                        const liveStatus = (await getSessionStatusMap())[sid]
+                                        busyAgain = liveStatus === "busy" || liveStatus === "retry"
+                                    } catch (e) {
+                                        dbg(
+                                            `session.idle sid=${short(sid)}: silent-dead-stream status check failed: ${e instanceof Error ? e.message : String(e)}`,
+                                        )
+                                    }
+                                    if (busyAgain) {
+                                        dbg(
+                                            `session.idle sid=${short(sid)}: silent-dead-stream recovery skipped, session is busy/retry again`,
+                                        )
+                                    } else {
+                                        w.pendingRecovery = true
+                                        w.pendingRecoveryReason = `silent-${dead.finish}`
+                                        w.pendingRecoveryAt = Date.now()
+                                        await log(
+                                            "info",
+                                            `${short(sid)} - silent dead stream: finish=${dead.finish}, ${dead.outputTokens} output tokens, no text parts; resuming`,
+                                        )
+                                        await tryResume(
+                                            sid,
+                                            w,
+                                            `Silent dead stream (${dead.finish})`,
+                                            continuePrompt,
+                                        )
+                                    }
                                 }
                             } catch (e) {
                                 const errMsg =

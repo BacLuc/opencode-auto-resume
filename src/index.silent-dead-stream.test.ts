@@ -183,7 +183,7 @@ describe("getLastSilentDeadStream()", () => {
         expect(result).toEqual({ finish: "unknown", outputTokens: 200 })
     })
 
-    test("returns the LAST assistant message with no text, not one with text", () => {
+    test("newest assistant message has text → returns null (completed normally, never walks past the final answer)", () => {
         const messages = [
             {
                 role: "assistant",
@@ -200,8 +200,7 @@ describe("getLastSilentDeadStream()", () => {
             },
         ]
         const result = getLastSilentDeadStream(messages)
-        // Last message has text, so skip it; earlier message has no text → return that
-        expect(result).toEqual({ finish: "unknown", outputTokens: 100 })
+        expect(result).toBeNull()
     })
 
     test("skips non-assistant roles", () => {
@@ -527,6 +526,70 @@ describe("idle handler - silent dead stream detection", () => {
         expect(promptCalls.length).toBe(1)
         expect(promptCalls[0].sid).toBe("ses_infotokens")
     })
+    test("REGRESSION (reported bug): tool-call step (205 tok, no text) then final text answer → NO recovery", async () => {
+        const { ctx, promptCalls } = createMockContext({
+            sessions: [{ id: "ses_repro", status: "idle" }],
+            messages: {
+                ses_repro: [
+                    { role: "user", parts: [{ type: "text", text: "do it" }] },
+                    {
+                        role: "assistant",
+                        finish: "tool-calls",
+                        parts: [{ type: "reasoning", text: "planning..." }],
+                        tokens: { output: 205 },
+                    },
+                    { role: "user", parts: [{ type: "tool", state: { output: "ok" } }] },
+                    {
+                        role: "assistant",
+                        finish: "stop",
+                        parts: [{ type: "text", text: "A".repeat(4124) }],
+                        tokens: { output: 1200 },
+                    },
+                ],
+            },
+        })
+        const hooks = await AutoResumePlugin(ctx, OPTS as any)
+
+        await hooks.event!({
+            event: {
+                type: "session.status",
+                sessionID: "ses_repro",
+                properties: { status: "idle" },
+            },
+        } as any)
+        await wait(50)
+
+        expect(promptCalls.length).toBe(0)
+    })
+
+    test("dead stream detected but live status is busy again → recovery skipped (race guard)", async () => {
+        const { ctx, promptCalls } = createMockContext({
+            sessions: [{ id: "ses_race", status: "idle" }],
+            messages: {
+                ses_race: [
+                    {
+                        role: "assistant",
+                        finish: "unknown",
+                        parts: [{ type: "reasoning", text: "thinking..." }],
+                        tokens: { output: 250 },
+                    },
+                ],
+            },
+            statusMap: { ses_race: { type: "busy" } },
+        })
+        const hooks = await AutoResumePlugin(ctx, OPTS as any)
+
+        await hooks.event!({
+            event: {
+                type: "session.status",
+                sessionID: "ses_race",
+                properties: { status: "idle" },
+            },
+        } as any)
+        await wait(50)
+
+        expect(promptCalls.length).toBe(0)
+    })
 })
 
 /**
@@ -553,7 +616,7 @@ function getLastSilentDeadStream(
             const t = p as Record<string, unknown>
             return t.type === "text" && typeof t.text === "string" && t.text.length > 0
         })
-        if (hasText) continue
+        if (hasText) return null
 
         const tokens = msg.tokens as Record<string, unknown> | undefined
         const tInfo = info?.tokens as Record<string, unknown> | undefined
