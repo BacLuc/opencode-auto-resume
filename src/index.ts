@@ -24,6 +24,8 @@ interface SessionWatch {
     resumeAttempts: number
     lastRetryAt: number
     gaveUp: boolean
+    // Survives resetSessionFlags/resetIdleFlags; cleared only on user restart (command.executed) or fresh watch.
+    terminalError: boolean
     orphanWatchStartAt: number | null
     aborting: boolean
     toolTextRecovered: boolean
@@ -154,6 +156,42 @@ function containsDoneClaimPattern(text: string): boolean {
     return DONE_CLAIM_PATTERNS.some((pat) => pat.test(lastLines))
 }
 
+const RETRYABLE_QUOTA_PATTERN = /quota exceeded|usage limit (reached|exceeded)/i
+
+const TERMINAL_ERROR_MESSAGE_PATTERNS = [
+    /insufficient[ _-]?(balance|funds|credit|quota)/i,
+    /out of (funds|credits|balance|quota)|credit balance.{0,20}too low|exceeded your current quota/i,
+    RETRYABLE_QUOTA_PATTERN,
+    /(invalid|expired|revoked|incorrect)[ _-]?(api[ _-]?key|access[ _-]?token|token)|api[ _-]?key (invalid|expired|revoked|incorrect)/i,
+    /authentication (failed|error)/i,
+    /unauthorized|forbidden|payment required/i,
+]
+
+export function isTerminalError(input: unknown): boolean {
+    // "quota exceeded"/"usage limit" also fire on transient per-minute 429s, so that
+    // one pattern is skipped when data.isRetryable === true; balance/auth phrases still match.
+    const matchesText = (s: string, skipRetryableQuota = false) =>
+        TERMINAL_ERROR_MESSAGE_PATTERNS.some((pat) => (skipRetryableQuota && pat === RETRYABLE_QUOTA_PATTERN ? false : pat.test(s)))
+    if (typeof input === "string") return matchesText(input)
+    if (!input || typeof input !== "object") return false
+
+    const err = input as Record<string, unknown>
+    const data = err.data
+    const skipRetryableQuota = !!data && typeof data === "object" && (data as Record<string, unknown>).isRetryable === true
+    if (err.name === "ProviderAuthError") return true
+    if (err.name === "APIError" && data && typeof data === "object") {
+        const d = data as Record<string, unknown>
+        if (d.isRetryable === false) return true
+        if (typeof d.statusCode === "number" && (d.statusCode === 401 || d.statusCode === 402 || d.statusCode === 403)) return true
+    }
+
+    const dObj = data && typeof data === "object" ? data as Record<string, unknown> : undefined
+    for (const candidate of [dObj?.message, dObj?.responseBody, typeof data === "string" ? data : undefined, err.message]) {
+        if (typeof candidate === "string" && matchesText(candidate, skipRetryableQuota)) return true
+    }
+    return false
+}
+
 export function buildOpenTodosReminder(todos: Todo[]): string {
     const open = todos.filter(t => t.status === "pending" || t.status === "in_progress")
     if (open.length === 0) return "continue"
@@ -221,6 +259,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 resumeAttempts: 0,
                 lastRetryAt: 0,
                 gaveUp: false,
+                terminalError: false,
                 orphanWatchStartAt: null,
                 aborting: false,
                 toolTextRecovered: false,
@@ -353,6 +392,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     }
 
     async function sendContinuePrompt(sid: string, text: string, w: SessionWatch) {
+        if (w.terminalError) {
+            await log("debug", `${short(sid)} - terminal provider error, suppressing continue`)
+            return
+        }
         if (w.continuing) {
             await log("debug", `${short(sid)} - continue already in progress, skipping`)
             return
@@ -513,6 +556,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     const SUBAGENT_RECOVERY_PROMPT = "It looks like you may have stalled or timed out. Please retry the last operation or continue with the task."
 
     async function recoverSubagent(subagentSid: string): Promise<boolean> {
+        if (sessions.get(subagentSid)?.terminalError) return false
         try {
             await ctx.client.session.prompt({
                 path: { id: subagentSid },
@@ -972,6 +1016,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     // -----------------------------------------------------------------------
 
     async function tryAbortAndResume(sid: string, w: SessionWatch): Promise<boolean> {
+        if (w.terminalError) return false
         if (typeof sid !== "string" || !sid || !sid.startsWith("ses_")) {
             await log("warn", `Invalid sid for abort: ${sid} (must start with "ses_")`)
             return false
@@ -1394,6 +1439,28 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                     break
                 }
 
+                if (isTerminalError(errorObj)) {
+                    const target = sid ? { sid, w: ensureWatch(sid) } : getLoneBusySession()
+                    if (target) {
+                        if (!target.w.terminalError) {
+                            target.w.terminalError = true
+                            log("error", `${short(target.sid)} - terminal provider error (${errorName}); auto-resume disabled`)
+                            try {
+                                await ctx.client.session.abort({ path: { id: target.sid } })
+                            } catch {
+                                log("warn", `${short(target.sid)} - terminal-error abort failed`)
+                            }
+                        }
+                        if (target.w.status === "busy") {
+                            target.w.status = "idle"
+                            resetIdleFlags(target.w)
+                        }
+                    } else {
+                        log("error", `Terminal provider error (${errorName}) but no target session; continuing anyway`)
+                    }
+                    break
+                }
+
                 if (busyCount() === 0) break
 
                 const errorMessage =
@@ -1406,6 +1473,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             case "command.executed": {
                 for (const [, w] of sessions) {
                     resetSessionFlags(w)
+                    w.terminalError = false // user-initiated command re-enables auto-resume
                 }
                 break
             }

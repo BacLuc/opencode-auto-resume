@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from "bun:test"
-import { AutoResumePlugin } from "./index"
+import { AutoResumePlugin, isTerminalError } from "./index"
 
 type PromptCall = { sid: string; body: string; agent?: string }
 
@@ -366,6 +366,152 @@ describe("handleEvent - session.error", () => {
 
         expect(promptCalls.length).toBe(0)
     })
+
+    test("terminal APIError (402 insufficient balance) → abort sent, auto-resume disabled for session", async () => {
+        const { ctx, promptCalls, abortCalls } = createMockContext({
+            sessions: [{ id: "ses_x", status: "busy" }],
+            messages: {}
+        })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "busy" } } })
+        await hooks.event({
+            event: {
+                type: "session.error",
+                sessionID: "ses_x",
+                properties: { error: { name: "APIError", data: { statusCode: 402, isRetryable: false, message: "insufficient balance" } } }
+            }
+        })
+
+        await wait(50)
+
+        expect(abortCalls.some(c => c.sid === "ses_x")).toBe(true)
+        expect(promptCalls.length).toBe(0)
+
+        // Open todos + idle afterwards must NOT re-prompt
+        await hooks.event({
+            event: {
+                type: "todo.updated",
+                sessionID: "ses_x",
+                properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "high" }] }
+            }
+        })
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "idle" } } })
+        await wait(50)
+
+        expect(promptCalls.length).toBe(0)
+    })
+
+    test("terminal ProviderAuthError (invalid api key) → abort sent, no prompts", async () => {
+        const { ctx, promptCalls, abortCalls } = createMockContext({
+            sessions: [{ id: "ses_x", status: "busy" }],
+            messages: {}
+        })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "busy" } } })
+        await hooks.event({
+            event: {
+                type: "session.error",
+                sessionID: "ses_x",
+                properties: { error: { name: "ProviderAuthError", data: { providerID: "anthropic", message: "invalid api key" } } }
+            }
+        })
+
+        await wait(50)
+
+        expect(abortCalls.some(c => c.sid === "ses_x")).toBe(true)
+        expect(promptCalls.length).toBe(0)
+    })
+
+    test("retryable 429 rate-limit error → no abort; subsequent idle-with-todos still prompts", async () => {
+        const { ctx, promptCalls, abortCalls } = createMockContext({
+            sessions: [{ id: "ses_x", status: "busy" }],
+            messages: {}
+        })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "busy" } } })
+        await hooks.event({
+            event: {
+                type: "session.error",
+                sessionID: "ses_x",
+                properties: { error: { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "Rate limited. Please retry." } } }
+            }
+        })
+
+        await wait(50)
+
+        expect(abortCalls.length).toBe(0)
+
+        await hooks.event({
+            event: {
+                type: "todo.updated",
+                sessionID: "ses_x",
+                properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "high" }] }
+            }
+        })
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "idle" } } })
+        await wait(100)
+
+        expect(promptCalls.length).toBe(1)
+    })
+
+    test("terminal error then command.executed → auto-resume re-enabled (busy reset alone keeps flag until then)", async () => {
+        const { ctx, promptCalls, abortCalls } = createMockContext({
+            sessions: [{ id: "ses_x", status: "busy" }],
+            messages: {}
+        })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "busy" } } })
+        await hooks.event({
+            event: {
+                type: "session.error",
+                sessionID: "ses_x",
+                properties: { error: { name: "APIError", data: { statusCode: 401, isRetryable: false } } }
+            }
+        })
+        await wait(50)
+        expect(abortCalls.some(c => c.sid === "ses_x")).toBe(true)
+
+        // User restarts via command → clears terminal flag
+        await hooks.event({ event: { type: "command.executed" } })
+
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "busy" } } })
+        await hooks.event({
+            event: {
+                type: "todo.updated",
+                sessionID: "ses_x",
+                properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "high" }] }
+            }
+        })
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "idle" } } })
+        await wait(100)
+
+        expect(promptCalls.length).toBe(1)
+    })
+
+    test("terminal error without sessionID → lone busy session gets aborted", async () => {
+        const { ctx, promptCalls, abortCalls } = createMockContext({
+            sessions: [{ id: "ses_y", status: "busy" }],
+            messages: {}
+        })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_y", properties: { status: "busy" } } })
+        await hooks.event({
+            event: {
+                type: "session.error",
+                properties: { error: { name: "ProviderAuthError", data: { message: "authentication failed" } } }
+            }
+        })
+
+        await wait(50)
+
+        expect(abortCalls.some(c => c.sid === "ses_y")).toBe(true)
+        expect(promptCalls.length).toBe(0)
+    })
 })
 
 describe("handleEvent - command.executed", () => {
@@ -574,5 +720,33 @@ describe("handleEvent - edge cases", () => {
         await wait(50)
 
         expect(promptCalls.length).toBe(0)
+    })
+})
+
+describe("isTerminalError()", () => {
+    test("terminal shapes → true", () => {
+        expect(isTerminalError({ name: "ProviderAuthError" })).toBe(true)
+        expect(isTerminalError({ name: "APIError", data: { statusCode: 402, isRetryable: true } })).toBe(true)
+        expect(isTerminalError({ name: "APIError", data: { isRetryable: false } })).toBe(true)
+        expect(isTerminalError("Insufficient Balance")).toBe(true)
+        expect(isTerminalError("Invalid API key")).toBe(true)
+        expect(isTerminalError("out of funds")).toBe(true)
+        expect(isTerminalError({ name: "APIError", data: { statusCode: 429, isRetryable: true, message: "insufficient_quota" } })).toBe(true)
+        expect(isTerminalError("Your credit balance is too low to access the API")).toBe(true)
+        expect(isTerminalError("You exceeded your current quota, please check your plan and billing details")).toBe(true)
+        expect(isTerminalError("Incorrect API key provided")).toBe(true)
+        expect(isTerminalError({ name: "APIError", data: { isRetryable: true, statusCode: 429, responseBody: "Error: insufficient balance" } })).toBe(true)
+    })
+
+    test("retryable/irrelevant shapes → false", () => {
+        expect(isTerminalError({ name: "APIError", data: { statusCode: 429, isRetryable: true, message: "slow down" } })).toBe(false)
+        expect(isTerminalError({ name: "APIError", data: { statusCode: 429, isRetryable: true, message: "Quota exceeded for quota metric 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' and limit 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' of service 'openai-gpt-ttls.googleapis.com' for consumer 'project:my-project'. Retry the request after 60s." } })).toBe(false)
+        expect(isTerminalError({ name: "APIError", data: { statusCode: null, isRetryable: true, message: "ok" } })).toBe(false)
+        expect(isTerminalError(null)).toBe(false)
+        expect(isTerminalError(undefined)).toBe(false)
+        expect(isTerminalError("continue")).toBe(false)
+        expect(isTerminalError({})).toBe(false)
+        expect(isTerminalError([])).toBe(false)
+        expect(isTerminalError({ name: "MessageAbortedError", data: { message: "aborted" } })).toBe(false)
     })
 })
