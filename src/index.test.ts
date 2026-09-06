@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test"
+import { isFatalAuthError } from "./index"
 
 function short(id: string): string {
     return id.length > 8 ? id.slice(0, 4) + "…" + id.slice(-4) : id
@@ -182,5 +183,80 @@ describe("Agent validation", () => {
         const w = { agent: 123 } as { agent?: string }
         const agent = typeof w.agent === "string" ? w.agent : undefined
         expect(agent).toBe(undefined)
+    })
+})
+
+// -----------------------------------------------------------------------
+// Tests: isFatalAuthError()
+// -----------------------------------------------------------------------
+
+describe("isFatalAuthError()", () => {
+    test("returns true for ProviderAuthError name", () => {
+        expect(isFatalAuthError("ProviderAuthError", "")).toBe(true)
+    })
+
+    test("returns true for insufficient balance", () => {
+        expect(isFatalAuthError("Error", "Insufficient balance for request")).toBe(true)
+    })
+
+    test("returns true for invalid access token", () => {
+        expect(isFatalAuthError("Error", "Invalid access token")).toBe(true)
+    })
+
+    test("returns true for invalid api key", () => {
+        expect(isFatalAuthError("Error", "Invalid API key")).toBe(true)
+        expect(isFatalAuthError("Error", "invalid api_key")).toBe(true)
+        expect(isFatalAuthError("Error", "invalid api-key")).toBe(true)
+    })
+
+    test("returns true for expired token", () => {
+        expect(isFatalAuthError("Error", "Expired access token")).toBe(true)
+        expect(isFatalAuthError("Error", "Expired token")).toBe(true)
+    })
+
+    test("returns true for unauthorized", () => {
+        expect(isFatalAuthError("Error", "unauthorized access")).toBe(true)
+    })
+
+    test("returns true for forbidden", () => {
+        expect(isFatalAuthError("Error", "forbidden")).toBe(true)
+    })
+
+    test("returns true for out of quota", () => {
+        expect(isFatalAuthError("Error", "Out of quota")).toBe(true)
+        expect(isFatalAuthError("Error", "Out of credit")).toBe(true)
+    })
+
+    test("returns true for no credits", () => {
+        expect(isFatalAuthError("Error", "No credits remaining")).toBe(true)
+        expect(isFatalAuthError("Error", "No balance left")).toBe(true)
+    })
+
+    test("returns true for payment required", () => {
+        expect(isFatalAuthError("Error", "Payment required")).toBe(true)
+    })
+
+    test("returns true for account restriction", () => {
+        expect(isFatalAuthError("Error", "This account does not have access")).toBe(true)
+    })
+
+    test("returns false for rate limit (non-fatal)", () => {
+        expect(isFatalAuthError("Error", "rate limit exceeded")).toBe(false)
+    })
+
+    test("returns false for too many requests", () => {
+        expect(isFatalAuthError("Error", "Too many requests")).toBe(false)
+    })
+
+    test("returns false for timeout", () => {
+        expect(isFatalAuthError("Error", "Request timeout")).toBe(false)
+    })
+
+    test("returns false for empty strings", () => {
+        expect(isFatalAuthError("", "")).toBe(false)
+    })
+
+    test("returns false for unrelated errors", () => {
+        expect(isFatalAuthError("NetworkError", "Connection refused")).toBe(false)
     })
 })

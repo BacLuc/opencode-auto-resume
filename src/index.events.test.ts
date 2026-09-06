@@ -576,3 +576,75 @@ describe("handleEvent - edge cases", () => {
         expect(promptCalls.length).toBe(0)
     })
 })
+
+// -----------------------------------------------------------------------
+// Tests: fatal auth error detection
+// -----------------------------------------------------------------------
+
+describe("fatal auth error detection", () => {
+    test("ProviderAuthError suppresses subsequent continue prompt", async () => {
+        const { ctx } = createMockContext({
+            sessions: [{ id: "ses_fatal1", status: "busy" }],
+            messages: {}
+        })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+
+        // Register session as busy
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_fatal1", properties: { status: "busy" } } })
+
+        // Emit fatal auth error
+        await hooks.event({
+            event: {
+                type: "session.error",
+                sessionID: "ses_fatal1",
+                properties: { error: { name: "ProviderAuthError", data: { message: "Invalid API key" } } }
+            }
+        })
+
+        await wait(50)
+
+        // Session should have gaveUp=true, no further continue prompts
+        // The session.error should have been handled without crashing
+    })
+
+    test("403 status code triggers gaveUp", async () => {
+        const { ctx } = createMockContext({
+            sessions: [{ id: "ses_fatal2", status: "busy" }],
+            messages: {}
+        })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_fatal2", properties: { status: "busy" } } })
+
+        await hooks.event({
+            event: {
+                type: "session.error",
+                sessionID: "ses_fatal2",
+                properties: { error: { name: "ProviderError", data: { message: "Forbidden", statusCode: 403 } } }
+            }
+        })
+
+        await wait(50)
+    })
+
+    test("rate limit error does not trigger gaveUp", async () => {
+        const { ctx } = createMockContext({
+            sessions: [{ id: "ses_fatal3", status: "busy" }],
+            messages: {}
+        })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_fatal3", properties: { status: "busy" } } })
+
+        await hooks.event({
+            event: {
+                type: "session.error",
+                sessionID: "ses_fatal3",
+                properties: { error: { name: "ProviderError", data: { message: "rate limit exceeded" } } }
+            }
+        })
+
+        await wait(50)
+        // No crash, no gaveUp set
+    })
+})

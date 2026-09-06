@@ -122,6 +122,27 @@ function containsToolCallAsText(text: string): boolean {
     return false
 }
 
+export function isFatalAuthError(errorName: string, errorMessage: string): boolean {
+    if (errorName === "ProviderAuthError") return true
+
+    const message = errorMessage.toLowerCase()
+    const fatalPatterns = [
+        /insufficient balance/,
+        /invalid access token/,
+        /invalid api[ _-]?key/,
+        /incorrect api key/,
+        /expired (access )?token/,
+        /unauthorized/,
+        /forbidden/,
+        /out of (quota|credit)/,
+        /no (credits|balance)/,
+        /payment required/,
+        /this account does not have/,
+    ]
+
+    return fatalPatterns.some(pat => pat.test(message))
+}
+
 function containsReadyToContinuePattern(text: string): boolean {
     const lines = text.split('\n')
     const lastLine = lines[lines.length - 1]?.trim()
@@ -419,6 +440,13 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             w.lastRetryAt = Date.now()
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err)
+            const errName = (err as Error)?.name ?? ""
+            if (isFatalAuthError(errName, errMsg)) {
+                w.gaveUp = true
+                if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
+                await log("warn", `Fatal error in continue prompt: ${errName} (${errMsg}) — giving up`)
+                throw err
+            }
             await log("warn", `${short(sid)} - prompt failed: ${errMsg}`)
             try {
                 await ctx.client.session.prompt({
@@ -972,6 +1000,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     // -----------------------------------------------------------------------
 
     async function tryAbortAndResume(sid: string, w: SessionWatch): Promise<boolean> {
+        if (w.gaveUp) return false
         if (typeof sid !== "string" || !sid || !sid.startsWith("ses_")) {
             await log("warn", `Invalid sid for abort: ${sid} (must start with "ses_")`)
             return false
@@ -1016,6 +1045,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     // -----------------------------------------------------------------------
 
     async function tryResume(sid: string, w: SessionWatch, reason: string, prompt?: string): Promise<boolean> {
+        if (w.gaveUp) return false
         if (typeof sid !== "string" || !sid) {
             await log("warn", `tryResume called with invalid sid: ${sid}`)
             return false
@@ -1399,6 +1429,24 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 const errorMessage =
                     (errorObj?.data as Record<string, unknown>)?.message as string | undefined ??
                     String(errorObj?.data ?? "")
+                const statusCode =
+                    (errorObj?.data as Record<string, unknown>)?.statusCode as number | undefined ??
+                    (errorObj?.data as Record<string, unknown>)?.status as number | undefined
+
+                const isFatal = isFatalAuthError(errorName, errorMessage)
+                    || (statusCode !== undefined && [401, 402, 403].includes(statusCode))
+
+                if (isFatal) {
+                    for (const [wSid, w] of sessions) {
+                        if (w.status === "busy") {
+                            w.gaveUp = true
+                            if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
+                            log("warn", `Fatal auth/balance error: ${errorName} (${errorMessage}) — stopping retries for session ${short(wSid)}`)
+                        }
+                    }
+                    break
+                }
+
                 log("debug", `Session error: ${errorName} - ${errorMessage}`)
                 break
             }

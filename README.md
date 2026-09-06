@@ -147,6 +147,12 @@ _Motivated by:_
 
 ---
 
+### Fatal auth/balance error detection
+
+When a `session.error` event carries a fatal auth error (`ProviderAuthError`, 401/402/403 status codes, or messages matching patterns like "insufficient balance", "invalid API key", "expired token"), the plugin immediately marks all busy sessions as gave-up. This stops all retry and resume attempts across every session — since the error is account-wide (bad API key, depleted balance), retrying other sessions would be equally futile. The user must re-authenticate or add credits; when the session transitions back to busy, gave-up resets automatically.
+
+---
+
 ### Session discovery & cleanup
 
 Periodically calls `session.list()` (every 60s) to pick up sessions that were missed by event tracking. Idle sessions are cleaned up after 10 minutes or when the idle map exceeds 50 entries, preventing memory leaks.
