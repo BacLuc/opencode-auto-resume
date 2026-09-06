@@ -576,3 +576,36 @@ describe("handleEvent - edge cases", () => {
         expect(promptCalls.length).toBe(0)
     })
 })
+
+describe("handleEvent - session.error non-retryable", () => {
+    test("session.error with insufficient balance → no prompt sent", async () => {
+        const { ctx, promptCalls } = createMockContext({
+            sessions: [{ id: "ses_test1", status: "busy" }],
+            messages: {}
+        })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+
+        // Make session busy
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_test1", properties: { status: "busy" } } })
+
+        // Send session.error with insufficient balance
+        await hooks.event({
+            event: {
+                type: "session.error",
+                sessionID: "ses_test1",
+                properties: {
+                    error: {
+                        name: "ProviderError",
+                        data: { message: "insufficient balance" }
+                    }
+                }
+            }
+        })
+
+        // Wait briefly for any async processing
+        await wait(50)
+
+        // No prompt should have been sent
+        expect(promptCalls.length).toBe(0)
+    })
+})

@@ -184,3 +184,141 @@ describe("Agent validation", () => {
         expect(agent).toBe(undefined)
     })
 })
+
+// -----------------------------------------------------------------------
+// Tests: isNonRetryableError()
+// -----------------------------------------------------------------------
+
+import { isNonRetryableError } from "./index"
+
+describe("isNonRetryableError()", () => {
+    // Non-retryable: should return true
+    test("returns true for HTTP 401", () => {
+        expect(isNonRetryableError({ status: 401 })).toBe(true)
+    })
+
+    test("returns true for HTTP 402", () => {
+        expect(isNonRetryableError({ status: 402 })).toBe(true)
+    })
+
+    test("returns true for HTTP 403", () => {
+        expect(isNonRetryableError({ status: 403 })).toBe(true)
+    })
+
+    test("returns true for ProviderAuthError name", () => {
+        expect(isNonRetryableError({ name: "ProviderAuthError", data: { message: "some error" } })).toBe(true)
+    })
+
+    test("returns true for AuthError name", () => {
+        expect(isNonRetryableError({ name: "AuthError", data: { message: "some error" } })).toBe(true)
+    })
+
+    test("returns true for BadRequestError with matching message", () => {
+        expect(isNonRetryableError({ name: "BadRequestError", data: { message: "insufficient balance" } })).toBe(true)
+    })
+
+    test("returns false for BadRequestError without matching message", () => {
+        expect(isNonRetryableError({ name: "BadRequestError", data: { message: "invalid parameter" } })).toBe(false)
+    })
+
+    test("returns true for 'insufficient balance' in message", () => {
+        expect(isNonRetryableError(new Error("insufficient balance"))).toBe(true)
+    })
+
+    test("returns true for 'insufficient_quota' in message", () => {
+        expect(isNonRetryableError(new Error("insufficient_quota"))).toBe(true)
+    })
+
+    test("returns true for 'invalid api key' in message", () => {
+        expect(isNonRetryableError(new Error("invalid api key"))).toBe(true)
+    })
+
+    test("returns true for 'invalid_api_key' in message", () => {
+        expect(isNonRetryableError(new Error("invalid_api_key"))).toBe(true)
+    })
+
+    test("returns true for 'token has expired' in message", () => {
+        expect(isNonRetryableError(new Error("token has expired"))).toBe(true)
+    })
+
+    test("returns true for 'unauthorized' in message", () => {
+        expect(isNonRetryableError(new Error("unauthorized access"))).toBe(true)
+    })
+
+    test("returns true for 'payment required' in message", () => {
+        expect(isNonRetryableError(new Error("payment required"))).toBe(true)
+    })
+
+    test("returns true for 'quota exceeded' in message", () => {
+        expect(isNonRetryableError(new Error("quota exceeded"))).toBe(true)
+    })
+
+    test("returns true for plain string 'insufficient balance'", () => {
+        expect(isNonRetryableError("insufficient balance")).toBe(true)
+    })
+
+    test("returns true for session.error payload with insufficient balance", () => {
+        expect(isNonRetryableError({
+            name: "ProviderError",
+            data: { message: "insufficient balance for this request" }
+        })).toBe(true)
+    })
+
+    test("returns true for error with statusCode 401", () => {
+        expect(isNonRetryableError({ statusCode: 401, message: "Unauthorized" })).toBe(true)
+    })
+
+    // Transient: should return false
+    test("returns false for 429 Too Many Requests", () => {
+        expect(isNonRetryableError(new Error("429 Too Many Requests"))).toBe(false)
+    })
+
+    test("returns false for timeout", () => {
+        expect(isNonRetryableError(new Error("timeout"))).toBe(false)
+    })
+
+    test("returns false for ETIMEDOUT", () => {
+        expect(isNonRetryableError(new Error("connect ETIMEDOUT"))).toBe(false)
+    })
+
+    test("returns false for ECONNRESET", () => {
+        expect(isNonRetryableError(new Error("read ECONNRESET"))).toBe(false)
+    })
+
+    test("returns false for stream disconnected", () => {
+        expect(isNonRetryableError(new Error("stream disconnected"))).toBe(false)
+    })
+
+    test("returns false for rate limit", () => {
+        expect(isNonRetryableError(new Error("rate limit exceeded"))).toBe(false)
+    })
+
+    test("returns false for 500 Internal Server Error", () => {
+        expect(isNonRetryableError(new Error("500 Internal Server Error"))).toBe(false)
+    })
+
+    test("returns false for HTTP 408", () => {
+        expect(isNonRetryableError({ status: 408 })).toBe(false)
+    })
+
+    test("returns false for HTTP 500", () => {
+        expect(isNonRetryableError({ status: 500 })).toBe(false)
+    })
+
+    test("returns false for HTTP 503", () => {
+        expect(isNonRetryableError({ status: 503 })).toBe(false)
+    })
+
+    test("returns false for HTTP 499", () => {
+        expect(isNonRetryableError({ status: 499 })).toBe(false)
+    })
+
+    test("returns false for null/undefined", () => {
+        expect(isNonRetryableError(null)).toBe(false)
+        expect(isNonRetryableError(undefined)).toBe(false)
+    })
+
+    test("returns false for empty string", () => {
+        expect(isNonRetryableError("")).toBe(false)
+    })
+})

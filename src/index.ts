@@ -42,6 +42,8 @@ interface SessionWatch {
     isSubagent: boolean
     completionSignaled: boolean
     todoNudgeAttempts: number
+    fatal: boolean
+    fatalReason: string | undefined
 }
 
 const DEFAULT_CHUNK_TIMEOUT_MS = 45_000
@@ -162,6 +164,56 @@ export function buildOpenTodosReminder(todos: Todo[]): string {
     return `You have ${open.length} unfinished task${plural}:\n${list}\n\nPlease continue working on these task${plural}.`
 }
 
+const NON_RETRYABLE_MSG_RE = /insufficient[\s_]+balance|insufficient[\s_]+quota|insufficient[\s_]+credit|no[\s_]+credit|out[\s_]+of[\s_]+credit|out[\s_]+of[\s_]+quota|quota[\s_]+exceeded|billing|invalid[\s_]+api[\s_]+key|invalid_api_key|invalid[\s_]+access[\s_]+token|invalid[\s_]+token|token[\s_]+has[\s_]+expired|key[\s_]+is[\s_]+not[\s_]+valid|unauthorized|permission[\s_]+denied|does[\s_]+not[\s_]+have[\s_]+enough|payment[\s_]+required/
+
+export function isNonRetryableError(input: unknown): boolean {
+    // Extract status code
+    let status: number | undefined
+    if (input && typeof input === "object") {
+        const obj = input as Record<string, unknown>
+        if (typeof obj.status === "number") status = obj.status
+        if (typeof obj.statusCode === "number") status = obj.statusCode
+        // session.error payload: { name, data: { message } }
+        const data = obj.data as Record<string, unknown> | undefined
+        const dataMsg = typeof data?.message === "string" ? data.message : undefined
+        const name = typeof obj.name === "string" ? obj.name : undefined
+        // Combine all available text for regex matching
+        const errText = [
+            name,
+            dataMsg,
+            typeof obj.message === "string" ? obj.message : undefined,
+        ].filter(Boolean).join(" ")
+        const lower = errText.toLowerCase()
+
+        // HTTP status codes
+        if (status === 401 || status === 402 || status === 403) return true
+        if (status === 400) {
+            // 400 is only fatal if the message matches known patterns
+            if (NON_RETRYABLE_MSG_RE.test(lower)) return true
+        }
+
+        // Error names
+        if (name === "ProviderAuthError" || name === "AuthError") return true
+        if (name === "BadRequestError" && NON_RETRYABLE_MSG_RE.test(lower)) return true
+
+        // Message regex
+        if (NON_RETRYABLE_MSG_RE.test(lower)) return true
+    }
+
+    // Plain string (error message)
+    if (typeof input === "string") {
+        if (NON_RETRYABLE_MSG_RE.test(input.toLowerCase())) return true
+    }
+
+    // Error instance
+    if (input instanceof Error) {
+        const lower = input.message.toLowerCase()
+        if (NON_RETRYABLE_MSG_RE.test(lower)) return true
+    }
+
+    return false
+}
+
 export const AutoResumePlugin: Plugin = async (ctx, options) => {
     const chunkTimeoutMs: number =
     (options?.chunkTimeoutMs as number) ?? DEFAULT_CHUNK_TIMEOUT_MS
@@ -239,6 +291,8 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 isSubagent: false,
                 completionSignaled: false,
                 todoNudgeAttempts: 0,
+                fatal: false,
+                fatalReason: undefined,
             }
             sessions.set(sid, w)
         }
@@ -419,6 +473,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             w.lastRetryAt = Date.now()
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err)
+            if (isNonRetryableError(err)) {
+                declareFatal(sid, w, errMsg)
+                throw err
+            }
             await log("warn", `${short(sid)} - prompt failed: ${errMsg}`)
             try {
                 await ctx.client.session.prompt({
@@ -429,6 +487,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 w.lastRetryAt = Date.now()
             } catch (retryErr) {
                 const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr)
+                if (isNonRetryableError(retryErr)) {
+                    declareFatal(sid, w, retryMsg)
+                    throw retryErr
+                }
                 await log("error", `${short(sid)} - prompt retry also failed: ${retryMsg}`)
                 throw retryErr
             }
@@ -513,6 +575,11 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     const SUBAGENT_RECOVERY_PROMPT = "It looks like you may have stalled or timed out. Please retry the last operation or continue with the task."
 
     async function recoverSubagent(subagentSid: string): Promise<boolean> {
+        const watch = sessions.get(subagentSid)
+        if (watch?.fatal) {
+            await log("debug", `${short(subagentSid)} - skipping subagent recovery, fatal error: ${watch.fatalReason}`)
+            return false
+        }
         try {
             await ctx.client.session.prompt({
                 path: { id: subagentSid },
@@ -573,7 +640,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         }
     }
 
-        async function checkSubagentStatus(parentSid: string): Promise<{ status: "crashed" | "idle" | "busy" | "unknown"; stuckSid?: string }> {
+        async function checkSubagentStatus(parentSid: string): Promise<{ status: "crashed" | "idle" | "busy" | "unknown" | "fatal"; stuckSid?: string }> {
         try {
             const statusMap = await getSessionStatusMap()
             const now = Date.now()
@@ -589,6 +656,11 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                     const lastMsg = messages[messages.length - 1]
 
                     if (lastMsg && roleOf(lastMsg) === "assistant" && ("error" in lastMsg || (lastMsg.info && "error" in (lastMsg.info as Record<string, unknown>)))) {
+                        const subErr = (lastMsg.error ?? (lastMsg.info as Record<string, unknown> | undefined)?.error) as Record<string, unknown> | undefined
+                        if (subErr && isNonRetryableError(subErr)) {
+                            await log("debug", `Subagent ${short(sId)} has non-retryable error`)
+                            return { status: "fatal" as "crashed" | "idle" | "busy" | "unknown" | "fatal" }
+                        }
                         await log("debug", `Subagent ${short(sId)} appears crashed`)
                         return { status: "crashed" }
                     }
@@ -644,6 +716,8 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         w.recentToolCalls = []
         w.toolLoopAttempts = 0
         if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
+        w.fatal = false
+        w.fatalReason = undefined
     }
 
     function resetIdleFlags(w: SessionWatch) {
@@ -651,6 +725,18 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         w.aborting = false
         w.orphanWatchStartAt = null
         w.idleSince = Date.now()
+    }
+
+    function declareFatal(sid: string, w: SessionWatch, detail: string) {
+        w.fatal = true
+        w.fatalReason = detail
+        w.gaveUp = true
+        w.resumeAttempts = maxRetries
+        w.toolTextAttempts = maxRetries
+        w.toolTextRecovered = true
+        w.completionSignaled = true
+        if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
+        log("error", `${short(sid)} - non-retryable provider error (${detail}); auto-resume disabled`)
     }
 
     /**
@@ -702,6 +788,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     async function checkForToolCallAsText(sid: string, w: SessionWatch) {
         if (typeof sid !== "string" || !sid) return
         if (w.userCancelled || w.toolTextRecovered) return
+        if (w.fatal) return
         if (w.status !== "idle") return
         if (w.checkingToolText) return
         w.checkingToolText = true
@@ -977,6 +1064,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             return false
         }
         if (w.aborting) return false
+        if (w.fatal) {
+            await log("debug", `${short(sid)} - skipping abort+resume, fatal error: ${w.fatalReason}`)
+            return false
+        }
         w.aborting = true
 
         const idleSec = Math.round((Date.now() - (w.orphanWatchStartAt ?? w.lastActivityAt)) / 1000)
@@ -1020,6 +1111,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             await log("warn", `tryResume called with invalid sid: ${sid}`)
             return false
         }
+        if (w.fatal) {
+            await log("debug", `${short(sid)} - skipping resume, fatal error: ${w.fatalReason}`)
+            return false
+        }
         const now = Date.now()
         const elapsedSinceRetry = now - w.lastRetryAt
         const requiredBackoff = backoffMs(w.resumeAttempts)
@@ -1047,6 +1142,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             return true
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err)
+            if (isNonRetryableError(err)) {
+                declareFatal(sid, w, errMsg)
+                return false
+            }
             await log("warn", `${short(sid)} - retry failed: ${errMsg}`)
             w.lastRetryAt = now
             return false
@@ -1101,6 +1200,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 if (w.status !== "busy") continue
                 if (w.userCancelled) continue
                 if (w.aborting) continue
+                if (w.fatal) continue
 
                 if (w.orphanWatchStartAt !== null) {
                     const orphanIdle = now - w.orphanWatchStartAt
@@ -1118,6 +1218,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                                 continue
                             }
                             const subStatus = await checkSubagentStatus(sid)
+                            if ((subStatus.status as string) === "fatal") {
+                                declareFatal(sid, w, "subagent non-retryable error")
+                                continue
+                            }
                             if (subStatus.status === "crashed" && subStatus.stuckSid) {
                                 const recovered = await recoverSubagent(subStatus.stuckSid)
                                 if (recovered) {
@@ -1168,6 +1272,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                     }
 
                     const subStatus = await checkSubagentStatus(sid)
+                    if ((subStatus.status as string) === "fatal") {
+                        declareFatal(sid, w, "subagent non-retryable error")
+                        continue
+                    }
                     if (subStatus.status === "idle" || subStatus.status === "unknown") {
                         await log("info", `Parent ${short(sid)} stuck with no active subagents. Triggering abort+resume.`)
                         tryAbortAndResume(sid, w)
@@ -1334,7 +1442,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
 
                     // If we just sent a continue and it got interrupted, retry immediately
                     // But limit to 3 consecutive interrupted continues to prevent infinite loops
-                    if (wasJustContinued && w.interruptedContinueCount < 3 && !w.toolTextRecovered && w.toolTextAttempts < maxRetries) {
+                    if (wasJustContinued && w.interruptedContinueCount < 3 && !w.toolTextRecovered && w.toolTextAttempts < maxRetries && !w.fatal) {
                         w.interruptedContinueCount++
                         await log("info", `${short(sid)} - continue was interrupted (${w.interruptedContinueCount}/3), retrying...`)
                         w.continuing = false // Reset flag so we can send again
@@ -1394,12 +1502,35 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                     break
                 }
 
+                // Detect non-retryable errors (auth/billing)
+                const errorData = errorObj?.data as Record<string, unknown> | undefined
+                const errorMessage = typeof errorData?.message === "string"
+                    ? errorData.message
+                    : typeof errorObj?.data === "string"
+                        ? errorObj.data
+                        : ""
+                if (isNonRetryableError({ name: errorName, message: errorMessage, data: errorData })) {
+                    // Find the affected session
+                    let targetSid = sid
+                    if (!targetSid) {
+                        const lone = getLoneBusySession()
+                        if (lone) targetSid = lone.sid
+                    }
+                    if (targetSid) {
+                        const w = sessions.get(targetSid)
+                        if (w) {
+                            declareFatal(targetSid, w, `${errorName}: ${errorMessage}`)
+                        }
+                    }
+                    break
+                }
+
                 if (busyCount() === 0) break
 
-                const errorMessage =
+                const errorMessage2 =
                     (errorObj?.data as Record<string, unknown>)?.message as string | undefined ??
                     String(errorObj?.data ?? "")
-                log("debug", `Session error: ${errorName} - ${errorMessage}`)
+                log("debug", `Session error: ${errorName} - ${errorMessage2}`)
                 break
             }
 
