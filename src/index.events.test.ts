@@ -724,29 +724,33 @@ describe("handleEvent - edge cases", () => {
 })
 
 describe("isTerminalError()", () => {
-    test("terminal shapes → true", () => {
-        expect(isTerminalError({ name: "ProviderAuthError" })).toBe(true)
-        expect(isTerminalError({ name: "APIError", data: { statusCode: 402, isRetryable: true } })).toBe(true)
-        expect(isTerminalError({ name: "APIError", data: { isRetryable: false } })).toBe(true)
-        expect(isTerminalError("Insufficient Balance")).toBe(true)
-        expect(isTerminalError("Invalid API key")).toBe(true)
-        expect(isTerminalError("out of funds")).toBe(true)
-        expect(isTerminalError({ name: "APIError", data: { statusCode: 429, isRetryable: true, message: "insufficient_quota" } })).toBe(true)
-        expect(isTerminalError("Your credit balance is too low to access the API")).toBe(true)
-        expect(isTerminalError("You exceeded your current quota, please check your plan and billing details")).toBe(true)
-        expect(isTerminalError("Incorrect API key provided")).toBe(true)
-        expect(isTerminalError({ name: "APIError", data: { isRetryable: true, statusCode: 429, responseBody: "Error: insufficient balance" } })).toBe(true)
+    test.each([
+        ["ProviderAuthError", { name: "ProviderAuthError" }],
+        ["APIError 402 isRetryable:true", { name: "APIError", data: { statusCode: 402, isRetryable: true } }],
+        ["APIError isRetryable:false", { name: "APIError", data: { isRetryable: false } }],
+        ["string: Insufficient Balance", "Insufficient Balance"],
+        ["string: Invalid API key", "Invalid API key"],
+        ["string: out of funds", "out of funds"],
+        ["APIError 429 insufficient_quota", { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "insufficient_quota" } }],
+        ["string: credit balance too low", "Your credit balance is too low to access the API"],
+        ["string: exceeded your current quota", "You exceeded your current quota, please check your plan and billing details"],
+        ["string: Incorrect API key", "Incorrect API key provided"],
+        ["APIError 429 responseBody insufficient balance", { name: "APIError", data: { isRetryable: true, statusCode: 429, responseBody: "Error: insufficient balance" } }],
+    ])("terminal shape %s → true", (_name, input) => {
+        expect(isTerminalError(input)).toBe(true)
     })
 
-    test("retryable/irrelevant shapes → false", () => {
-        expect(isTerminalError({ name: "APIError", data: { statusCode: 429, isRetryable: true, message: "slow down" } })).toBe(false)
-        expect(isTerminalError({ name: "APIError", data: { statusCode: 429, isRetryable: true, message: "Quota exceeded for quota metric 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' and limit 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' of service 'openai-gpt-ttls.googleapis.com' for consumer 'project:my-project'. Retry the request after 60s." } })).toBe(false)
-        expect(isTerminalError({ name: "APIError", data: { statusCode: null, isRetryable: true, message: "ok" } })).toBe(false)
-        expect(isTerminalError(null)).toBe(false)
-        expect(isTerminalError(undefined)).toBe(false)
-        expect(isTerminalError("continue")).toBe(false)
-        expect(isTerminalError({})).toBe(false)
-        expect(isTerminalError([])).toBe(false)
-        expect(isTerminalError({ name: "MessageAbortedError", data: { message: "aborted" } })).toBe(false)
+    test.each([
+        ["429 retryable slow down", { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "slow down" } }],
+        ["429 retryable GCP quota exceeded", { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "Quota exceeded for quota metric 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' and limit 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' of service 'openai-gpt-ttls.googleapis.com' for consumer 'project:my-project'. Retry the request after 60s." } }],
+        ["429 retryable null statusCode", { name: "APIError", data: { statusCode: null, isRetryable: true, message: "ok" } }],
+        ["null", null],
+        ["undefined", undefined],
+        ["string: continue", "continue"],
+        ["empty object", {}],
+        ["empty array", []],
+        ["MessageAbortedError", { name: "MessageAbortedError", data: { message: "aborted" } }],
+    ])("retryable shape %s → false", (_name, input) => {
+        expect(isTerminalError(input)).toBe(false)
     })
 })
