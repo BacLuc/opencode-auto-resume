@@ -10,7 +10,7 @@ LLM sessions fail in predictable ways. This plugin monitors all sessions and aut
 
 ### Stall recovery
 
-The stream goes silent but the session stays "busy". The UI shows a blinking cursor with no progress. If no events arrive for 48 seconds (`chunkTimeoutMs` + `gracePeriodMs`), the plugin sends `"continue"` with exponential backoff. After 3 failed attempts it gives up.
+The stream goes silent but the session stays "busy". The UI shows a blinking cursor with no progress. If no events arrive for 48 seconds (`chunkTimeoutMs` + `gracePeriodMs`), the plugin sends `"continue"` with exponential backoff. After 2 failed attempts it gives up.
 
 The plugin extracts the **agent, model, and provider** from the last session message, so it resumes with the exact same configuration the user was using (build, sisyphus, prometheus, etc.).
 
@@ -213,7 +213,7 @@ With options:
     ["opencode-auto-resume", {
       "chunkTimeoutMs": 45000,
       "gracePeriodMs": 3000,
-      "maxRetries": 3
+      "maxRetries": 2
     }]
   ]
 }
@@ -237,7 +237,7 @@ bun run build
   "plugin": [
     [
       "file:///home/YOURUSER/.config/opencode/plugins/opencode-auto-resume/dist/index.js",
-      { "chunkTimeoutMs": 45000, "maxRetries": 3 }
+      { "chunkTimeoutMs": 45000, "maxRetries": 2 }
     ]
   ]
 }
@@ -250,7 +250,7 @@ bun run build
 | `chunkTimeoutMs` | `45000` | Inactivity timeout before considering stream stalled |
 | `gracePeriodMs` | `3000` | Extra wait before acting (lets ESC/status events arrive) |
 | `checkIntervalMs` | `5000` | Timer poll interval |
-| `maxRetries` | `3` | Max auto-resume attempts before giving up |
+| `maxRetries` | `2` | Max auto-resume attempts before giving up |
 | `baseBackoffMs` | `1000` | First retry delay (doubles each attempt) |
 | `maxBackoffMs` | `8000` | Backoff cap |
 | `subagentWaitMs` | `15000` | Wait before treating orphan parent as stuck |
