@@ -151,7 +151,7 @@ _Motivated by:_
 
 Auth failures and insufficient balance cause all auto-resume to stop for the affected session. The plugin emits a single warn log (`service: "auto-resume"`) naming the error, then pauses — no further `"continue"` prompts are sent for that session.
 
-Detection uses structured signals first (`ProviderAuthError`, `APIError` with `isRetryable: false` or status 401/402/403), then falls back to narrow message-regex for billing phrases ("insufficient balance", "credit balance too low", "out of credits", "payment required", "invalid api key", "expired token", "authentication failed", "unauthorized").
+Detection uses structured signals first (`ProviderAuthError`, `APIError` with `isRetryable: false` or status 401/402/403), then falls back to narrow message-regex for billing phrases ("insufficient balance", "credit balance too low", "out of credits", "payment required", "invalid api key", "expired token", "authentication failed", "unauthorized", "personal access tokens not supported", "invalid authorization token").
 
 Rate-limit errors (429), timeouts, and other transient failures stay on the normal backoff path — they are deliberately NOT flagged.
 

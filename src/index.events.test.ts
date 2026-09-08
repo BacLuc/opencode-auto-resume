@@ -784,6 +784,9 @@ describe("isNonRetryableError()", () => {
         ["message: api key not valid", { name: "APIError", data: { message: "API key is not valid" } }],
         ["message: credential expired", { name: "APIError", data: { message: "credential expired" } }],
         ["APIError 429 isRetryable:true with insufficient message", { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "insufficient balance" } }],
+        ["message: personal access tokens not supported", { name: "APIError", data: { message: "Personal Access Tokens are not supported for this endpoint" } }],
+        ["message: invalid authorization token", { name: "APIError", data: { message: "Invalid authorization token" } }],
+        ["message: api key not valid (exact maintainer string)", { name: "APIError", data: { message: "API key not valid. Please pass a valid API key." } }],
     ])("non-retryable shape %s → true", (_name, input) => {
         expect(isNonRetryableError(input)).toBe(true)
     })
@@ -799,6 +802,8 @@ describe("isNonRetryableError()", () => {
         ["empty array", []],
         ["MessageAbortedError", { name: "MessageAbortedError", data: { message: "aborted" } }],
         ["generic ProviderError", { name: "ProviderError", data: { message: "rate limited" } }],
+        ["near-miss: personal access tokens supported (no 'not')", { name: "APIError", data: { message: "Personal Access Tokens are supported for this endpoint" } }],
+        ["near-miss: invalid refresh token (gap > 8, not broadened)", { name: "APIError", data: { message: "Invalid refresh token" } }],
     ])("retryable shape %s → false", (_name, input) => {
         expect(isNonRetryableError(input)).toBe(false)
     })

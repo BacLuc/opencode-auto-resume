@@ -186,6 +186,8 @@ export function isNonRetryableError(errorObj: Record<string, unknown> | undefine
         if (/(api.?key|access.?token|token|credential).{0,8}(invalid|expired|revoked|not valid)/i.test(lower)) return true
         if (/authentication (failed|error)/i.test(lower)) return true
         if (/unauthorized/i.test(lower)) return true
+        if (/personal access tokens? are not supported/i.test(lower)) return true
+        if (/invalid authorization token/i.test(lower)) return true
     }
 
     return false
