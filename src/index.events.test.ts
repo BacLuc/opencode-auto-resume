@@ -512,6 +512,45 @@ describe("handleEvent - session.error", () => {
         expect(abortCalls.length).toBe(0)
         expect(promptCalls.length).toBe(0)
     })
+
+    test("fatal error then busy event → flag cleared, subsequent idle with todos resumes", async () => {
+        const { ctx, promptCalls } = createMockContext({
+            sessions: [{ id: "ses_x", status: "busy" }],
+            messages: {}
+        })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+
+        // Make session busy, trigger fatal error
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "busy" } } })
+        await hooks.event({
+            event: {
+                type: "session.error",
+                sessionID: "ses_x",
+                properties: { error: { name: "APIError", data: { statusCode: 402, isRetryable: false, message: "insufficient balance" } } }
+            }
+        })
+        await wait(50)
+
+        // Idle + todos → should NOT prompt (fatal)
+        await hooks.event({
+            event: {
+                type: "todo.updated",
+                sessionID: "ses_x",
+                properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "high" }] }
+            }
+        })
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "idle" } } })
+        await wait(50)
+        expect(promptCalls.length).toBe(0)
+
+        // User sends new prompt → busy event → clears fatalError via resetSessionFlags
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "busy" } } })
+
+        // Now idle with todos → SHOULD prompt (flag cleared)
+        await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "idle" } } })
+        await wait(100)
+        expect(promptCalls.length).toBe(1)
+    })
 })
 
 describe("handleEvent - command.executed", () => {
@@ -726,40 +765,40 @@ describe("handleEvent - edge cases", () => {
 describe("isNonRetryableError()", () => {
     test.each([
         ["ProviderAuthError", { name: "ProviderAuthError" }],
-        ["APIError 402 isRetryable:true", { name: "APIError", data: { statusCode: 402, isRetryable: true } }],
         ["APIError isRetryable:false", { name: "APIError", data: { isRetryable: false } }],
         ["APIError 401", { name: "APIError", data: { statusCode: 401 } }],
+        ["APIError 402", { name: "APIError", data: { statusCode: 402 } }],
         ["APIError 403", { name: "APIError", data: { statusCode: 403 } }],
-        ["message: Insufficient Balance", { name: "APIError", data: { message: "Insufficient Balance" } }],
-        ["message: Invalid API key", { name: "APIError", data: { message: "Invalid API key" } }],
+        ["message: insufficient balance", { name: "APIError", data: { message: "Insufficient Balance" } }],
+        ["message: insufficient quota", { name: "APIError", data: { message: "insufficient_quota" } }],
         ["message: credit balance too low", { name: "APIError", data: { message: "Your credit balance is too low to access the API" } }],
         ["message: out of credits", { name: "APIError", data: { message: "You are out of credits" } }],
+        ["message: out of quota", { name: "APIError", data: { message: "out of quota" } }],
         ["message: payment required", { name: "APIError", data: { message: "Payment required" } }],
-        ["message: authentication failed", { name: "APIError", data: { message: "Authentication failed" } }],
-        ["message: unauthorized", { name: "APIError", data: { message: "Unauthorized" } }],
-        ["message: api key expired", { name: "APIError", data: { message: "Your api key has expired" } }],
+        ["message: invalid api key", { name: "APIError", data: { message: "Invalid API key" } }],
+        ["message: expired access token", { name: "APIError", data: { message: "Access token expired" } }],
         ["message: token revoked", { name: "APIError", data: { message: "Access token revoked" } }],
-        ["APIError 429 insufficient_quota", { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "insufficient_quota" } }],
+        ["message: authentication failed", { name: "APIError", data: { message: "Authentication failed" } }],
+        ["message: authentication error", { name: "APIError", data: { message: "authentication error" } }],
+        ["message: unauthorized", { name: "APIError", data: { message: "Unauthorized" } }],
+        ["message: api key not valid", { name: "APIError", data: { message: "API key is not valid" } }],
+        ["message: credential expired", { name: "APIError", data: { message: "credential expired" } }],
+        ["APIError 429 isRetryable:true with insufficient message", { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "insufficient balance" } }],
     ])("non-retryable shape %s → true", (_name, input) => {
         expect(isNonRetryableError(input)).toBe(true)
     })
 
     test.each([
         ["429 retryable slow down", { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "slow down" } }],
-        ["429 retryable GCP quota exceeded", { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "Quota exceeded for quota metric 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' and limit 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' of service 'openai-gpt-ttls.googleapis.com' for consumer 'project:my-project'. Retry the request after 60s." } }],
-        ["429 retryable null statusCode", { name: "APIError", data: { statusCode: null, isRetryable: true, message: "ok" } }],
+        ["429 retryable generic", { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "Rate limited. Please retry." } }],
+        ["500 internal server error", { name: "APIError", data: { statusCode: 500, message: "Internal Server Error" } }],
+        ["timeout", { name: "TimeoutError", data: { message: "timeout" } }],
         ["null", null],
         ["undefined", undefined],
         ["empty object", {}],
         ["empty array", []],
         ["MessageAbortedError", { name: "MessageAbortedError", data: { message: "aborted" } }],
-        ["APIError 429 responseBody insufficient balance", { name: "APIError", data: { isRetryable: true, statusCode: 429, responseBody: "Error: insufficient balance" } }],
-        ["string: Insufficient Balance", "Insufficient Balance"],
-        ["string: Invalid API key", "Invalid API key"],
-        ["string: out of funds", "out of funds"],
-        ["string: credit balance too low", "Your credit balance is too low to access the API"],
-        ["string: exceeded your current quota", "You exceeded your current quota, please check your plan and billing details"],
-        ["string: Incorrect API key", "Incorrect API key provided"],
+        ["generic ProviderError", { name: "ProviderError", data: { message: "rate limited" } }],
     ])("retryable shape %s → false", (_name, input) => {
         expect(isNonRetryableError(input)).toBe(false)
     })

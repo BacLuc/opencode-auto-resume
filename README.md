@@ -147,6 +147,18 @@ _Motivated by:_
 
 ---
 
+### Non-retryable error stop
+
+Auth failures and insufficient balance cause all auto-resume to stop for the affected session. The plugin emits a single warn log (`service: "auto-resume"`) naming the error, then pauses — no further `"continue"` prompts are sent for that session.
+
+Detection uses structured signals first (`ProviderAuthError`, `APIError` with `isRetryable: false` or status 401/402/403), then falls back to narrow message-regex for billing phrases ("insufficient balance", "credit balance too low", "out of credits", "payment required", "invalid api key", "expired token", "authentication failed", "unauthorized").
+
+Rate-limit errors (429), timeouts, and other transient failures stay on the normal backoff path — they are deliberately NOT flagged.
+
+Auto-resume re-engages when the user sends their next prompt (flag cleared on genuine user activity / `command.executed`).
+
+---
+
 ### Session discovery & cleanup
 
 Periodically calls `session.list()` (every 60s) to pick up sessions that were missed by event tracking. Idle sessions are cleaned up after 10 minutes or when the idle map exceeds 50 entries, preventing memory leaks.
