@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from "bun:test"
-import { AutoResumePlugin, isTerminalError } from "./index"
+import { AutoResumePlugin, isNonRetryableError } from "./index"
 
 type PromptCall = { sid: string; body: string; agent?: string }
 
@@ -367,7 +367,7 @@ describe("handleEvent - session.error", () => {
         expect(promptCalls.length).toBe(0)
     })
 
-    test("terminal APIError (402 insufficient balance) → abort sent, auto-resume disabled for session", async () => {
+    test("terminal APIError (402 insufficient balance) → no abort, auto-resume disabled for session", async () => {
         const { ctx, promptCalls, abortCalls } = createMockContext({
             sessions: [{ id: "ses_x", status: "busy" }],
             messages: {}
@@ -385,7 +385,7 @@ describe("handleEvent - session.error", () => {
 
         await wait(50)
 
-        expect(abortCalls.some(c => c.sid === "ses_x")).toBe(true)
+        expect(abortCalls.length).toBe(0)
         expect(promptCalls.length).toBe(0)
 
         // Open todos + idle afterwards must NOT re-prompt
@@ -402,7 +402,7 @@ describe("handleEvent - session.error", () => {
         expect(promptCalls.length).toBe(0)
     })
 
-    test("terminal ProviderAuthError (invalid api key) → abort sent, no prompts", async () => {
+    test("terminal ProviderAuthError (invalid api key) → no abort, no prompts", async () => {
         const { ctx, promptCalls, abortCalls } = createMockContext({
             sessions: [{ id: "ses_x", status: "busy" }],
             messages: {}
@@ -420,7 +420,7 @@ describe("handleEvent - session.error", () => {
 
         await wait(50)
 
-        expect(abortCalls.some(c => c.sid === "ses_x")).toBe(true)
+        expect(abortCalls.length).toBe(0)
         expect(promptCalls.length).toBe(0)
     })
 
@@ -473,9 +473,9 @@ describe("handleEvent - session.error", () => {
             }
         })
         await wait(50)
-        expect(abortCalls.some(c => c.sid === "ses_x")).toBe(true)
+        expect(abortCalls.length).toBe(0)
 
-        // User restarts via command → clears terminal flag
+        // User restarts via command → clears fatal flag
         await hooks.event({ event: { type: "command.executed" } })
 
         await hooks.event({ event: { type: "session.status", sessionID: "ses_x", properties: { status: "busy" } } })
@@ -492,7 +492,7 @@ describe("handleEvent - session.error", () => {
         expect(promptCalls.length).toBe(1)
     })
 
-    test("terminal error without sessionID → lone busy session gets aborted", async () => {
+    test("terminal error without sessionID → all busy sessions paused, no abort", async () => {
         const { ctx, promptCalls, abortCalls } = createMockContext({
             sessions: [{ id: "ses_y", status: "busy" }],
             messages: {}
@@ -509,7 +509,7 @@ describe("handleEvent - session.error", () => {
 
         await wait(50)
 
-        expect(abortCalls.some(c => c.sid === "ses_y")).toBe(true)
+        expect(abortCalls.length).toBe(0)
         expect(promptCalls.length).toBe(0)
     })
 })
@@ -723,21 +723,25 @@ describe("handleEvent - edge cases", () => {
     })
 })
 
-describe("isTerminalError()", () => {
+describe("isNonRetryableError()", () => {
     test.each([
         ["ProviderAuthError", { name: "ProviderAuthError" }],
         ["APIError 402 isRetryable:true", { name: "APIError", data: { statusCode: 402, isRetryable: true } }],
         ["APIError isRetryable:false", { name: "APIError", data: { isRetryable: false } }],
-        ["string: Insufficient Balance", "Insufficient Balance"],
-        ["string: Invalid API key", "Invalid API key"],
-        ["string: out of funds", "out of funds"],
+        ["APIError 401", { name: "APIError", data: { statusCode: 401 } }],
+        ["APIError 403", { name: "APIError", data: { statusCode: 403 } }],
+        ["message: Insufficient Balance", { name: "APIError", data: { message: "Insufficient Balance" } }],
+        ["message: Invalid API key", { name: "APIError", data: { message: "Invalid API key" } }],
+        ["message: credit balance too low", { name: "APIError", data: { message: "Your credit balance is too low to access the API" } }],
+        ["message: out of credits", { name: "APIError", data: { message: "You are out of credits" } }],
+        ["message: payment required", { name: "APIError", data: { message: "Payment required" } }],
+        ["message: authentication failed", { name: "APIError", data: { message: "Authentication failed" } }],
+        ["message: unauthorized", { name: "APIError", data: { message: "Unauthorized" } }],
+        ["message: api key expired", { name: "APIError", data: { message: "Your api key has expired" } }],
+        ["message: token revoked", { name: "APIError", data: { message: "Access token revoked" } }],
         ["APIError 429 insufficient_quota", { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "insufficient_quota" } }],
-        ["string: credit balance too low", "Your credit balance is too low to access the API"],
-        ["string: exceeded your current quota", "You exceeded your current quota, please check your plan and billing details"],
-        ["string: Incorrect API key", "Incorrect API key provided"],
-        ["APIError 429 responseBody insufficient balance", { name: "APIError", data: { isRetryable: true, statusCode: 429, responseBody: "Error: insufficient balance" } }],
-    ])("terminal shape %s → true", (_name, input) => {
-        expect(isTerminalError(input)).toBe(true)
+    ])("non-retryable shape %s → true", (_name, input) => {
+        expect(isNonRetryableError(input)).toBe(true)
     })
 
     test.each([
@@ -746,11 +750,17 @@ describe("isTerminalError()", () => {
         ["429 retryable null statusCode", { name: "APIError", data: { statusCode: null, isRetryable: true, message: "ok" } }],
         ["null", null],
         ["undefined", undefined],
-        ["string: continue", "continue"],
         ["empty object", {}],
         ["empty array", []],
         ["MessageAbortedError", { name: "MessageAbortedError", data: { message: "aborted" } }],
+        ["APIError 429 responseBody insufficient balance", { name: "APIError", data: { isRetryable: true, statusCode: 429, responseBody: "Error: insufficient balance" } }],
+        ["string: Insufficient Balance", "Insufficient Balance"],
+        ["string: Invalid API key", "Invalid API key"],
+        ["string: out of funds", "out of funds"],
+        ["string: credit balance too low", "Your credit balance is too low to access the API"],
+        ["string: exceeded your current quota", "You exceeded your current quota, please check your plan and billing details"],
+        ["string: Incorrect API key", "Incorrect API key provided"],
     ])("retryable shape %s → false", (_name, input) => {
-        expect(isTerminalError(input)).toBe(false)
+        expect(isNonRetryableError(input)).toBe(false)
     })
 })
