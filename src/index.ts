@@ -1456,6 +1456,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                                 w.fatalError = true
                                 w.status = "idle"
                                 resetIdleFlags(w)
+                                if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
                             }
                         }
                         await log("warn", `non-retryable provider error (${errorName}) with no sessionID: auto-resume paused for all busy sessions`)
