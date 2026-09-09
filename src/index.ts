@@ -41,6 +41,7 @@ export interface SessionWatch {
     lastSubagentCheckAt: number
     interruptedContinueCount: number
     recentToolCalls: ToolCallRecord[]
+    liveToolSigs: string[]
     toolLoopAttempts: number
     isSubagent: boolean
     completionSignaled: boolean
@@ -324,6 +325,28 @@ function getLastSilentDeadStream(
 }
 
 /**
+ * Stable fingerprint of a tool call: tool name + deterministically serialized
+ * arguments (object keys sorted). Identical name+arguments produce the same
+ * signature regardless of argument key order.
+ */
+function toolCallSignature(toolName: string, args: unknown): string {
+    const stable = (v: unknown): string => {
+        if (v === null) return "null"
+        if (v === undefined) return "undefined"
+        if (typeof v !== "object") return JSON.stringify(v) ?? String(v)
+        if (Array.isArray(v)) return "[" + v.map(stable).join(",") + "]"
+        const obj = v as Record<string, unknown>
+        return "{" + Object.keys(obj).sort().map((k) => JSON.stringify(k) + ":" + stable(obj[k])).join(",") + "}"
+    }
+    try {
+        return `${toolName}:${stable(args)}`.slice(0, 200)
+    } catch {
+        // Non-serializable args (cycles): degrade to a name-only fingerprint
+        return `${toolName}:unserializable`
+    }
+}
+
+/**
  * Exponential backoff for recovery retries: `base * 2^(attempt-1)`, capped at `max`.
  * Exported as a pure function for unit testing (WP-08).
  */
@@ -513,6 +536,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 lastSubagentCheckAt: 0,
                 interruptedContinueCount: 0,
                 recentToolCalls: [],
+                liveToolSigs: [],
                 toolLoopAttempts: 0,
                 isSubagent: false,
                 completionSignaled: false,
@@ -1087,6 +1111,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         w.checkingToolText = false
         w.interruptedContinueCount = 0
         w.recentToolCalls = []
+        w.liveToolSigs = []
         w.toolLoopAttempts = 0
         if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
         w.pendingRecovery = false
@@ -1110,6 +1135,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         w.checkingToolText = false
         w.interruptedContinueCount = 0
         w.recentToolCalls = []
+        w.liveToolSigs = []
         w.toolLoopAttempts = 0
         w.pendingRecovery = false
         w.pendingRecoveryReason = null
@@ -1161,6 +1187,20 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             if (matches >= 2) return true
         }
         return false
+    }
+
+    /**
+     * Live loop detection over name+args fingerprints: fires on 3+ identical
+     * consecutive signatures within the last 5, or a repeating cycle (length
+     * 2-5) occurring at least three times — the alternating-identical-calls
+     * case name-only tracking cannot see.
+     */
+    function detectLiveToolLoop(sigs: string[]): "consecutive" | "pattern" | null {
+        if (sigs.length < 6) return null
+        const last = sigs[sigs.length - 1]
+        if (sigs.slice(-5).filter((s) => s === last).length >= 3) return "consecutive"
+        if (detectPatternLoop(sigs)) return "pattern"
+        return null
     }
 
     function trackToolCall(w: SessionWatch, toolName: string): boolean {
@@ -2313,11 +2353,45 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             }
         },
 
-        "tool.execute.before": async (input) => {
+        "tool.execute.before": async (input, hookArgs) => {
             if (!input?.sessionID) return
             const w = ensureWatch(input.sessionID)
             w.pendingTools++
             w.lastActivityAt = Date.now()
+
+            const toolName = (input.tool as string) ?? "unknown"
+            const rawArgs = (hookArgs as { args?: unknown } | undefined)?.args
+                ?? (input as { args?: unknown }).args
+            w.liveToolSigs.push(toolCallSignature(toolName, rawArgs))
+            if (w.liveToolSigs.length > 15) w.liveToolSigs.splice(0, w.liveToolSigs.length - 15)
+
+            const loopKind = detectLiveToolLoop(w.liveToolSigs)
+            if (!loopKind || w.userCancelled || w.toolLoopAttempts >= 2 || w.pluginAbortInFlight) return
+
+            // Sanctioned exception to the busy-abort guard: a loop proven by 6+
+            // identical name+args fingerprints is the hallucinated-loop case the
+            // plugin is allowed to interrupt — the current call has not started yet.
+            w.toolLoopAttempts++
+            w.liveToolSigs = []
+            const sid = input.sessionID
+            const kind = loopKind
+            void (async () => {
+                try {
+                    if (typeof sid !== "string" || !sid.startsWith("ses")) return
+                    w.pluginAbortInFlight = true
+                    try {
+                        await ctx.client.session.abort({ path: { id: sid } })
+                        await log("warn", `${short(sid)} - live tool-loop (${kind}) detected; aborted, sending recovery prompt`)
+                        await new Promise((r) => setTimeout(r, ABORT_CONTINUE_DELAY_MS))
+                        await sendContinuePrompt(sid, TOOL_LOOP_RECOVERY_PROMPT, w)
+                    } finally {
+                        w.pluginAbortInFlight = false
+                    }
+                } catch (err) {
+                    const errMsg = err instanceof Error ? err.message : String(err)
+                    await log("warn", `${short(sid)} - live tool-loop intervention failed: ${errMsg}`)
+                }
+            })()
         },
 
         "command.execute.before": async (input) => {
