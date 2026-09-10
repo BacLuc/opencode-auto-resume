@@ -26,6 +26,9 @@ export interface SessionWatch {
     resumeAttempts: number
     lastRetryAt: number
     gaveUp: boolean
+    // Cleared in resetSessionFlags/resetBusyFlags (on busy/user activity and command.executed);
+    // a blocked continue never self-clears it.
+    fatalError: boolean
     orphanWatchStartAt: number | null
     aborting: boolean
     pluginAbortInFlight: boolean
@@ -204,6 +207,43 @@ function containsDoneClaimPattern(text: string): boolean {
     const lines = text.split('\n')
     const lastLines = lines.slice(-5).join('\n')
     return DONE_CLAIM_PATTERNS.some((pat) => pat.test(lastLines))
+}
+
+function isNonRetryableError(errorObj: Record<string, unknown> | undefined): boolean {
+    if (!errorObj || typeof errorObj !== "object") return false
+
+    const name = errorObj.name as string | undefined
+    const data = errorObj.data as Record<string, unknown> | undefined
+
+    // Structured signals — checked first (fast, deterministic)
+    if (name === "ProviderAuthError") return true
+
+    if (name === "APIError" && data && typeof data === "object") {
+        if (data.isRetryable === false) return true
+        const sc = data.statusCode as number | undefined
+        if (typeof sc === "number" && (sc === 401 || sc === 402 || sc === 403)) return true
+    }
+
+    // Narrow message-regex fallback — only covers auth/billing, NOT rate-limit/timeout.
+    // Deliberately does NOT match: "rate limit", "timeout", 429 with isRetryable:true.
+    // Those stay on the normal backoff path.
+    const msg = data?.message as string | undefined
+    if (typeof msg === "string") {
+        const lower = msg.toLowerCase()
+        if (/insufficient.{0,15}(balance|budget|quota|credit)/i.test(lower)) return true
+        if (/credit.{0,10}balance.{0,20}too low/i.test(lower)) return true
+        if (/out of (credits?|quota)/i.test(lower)) return true
+        if (/not enough (credits?|balance|funds)/i.test(lower)) return true
+        if (/payment required/i.test(lower)) return true
+        if (/(invalid|expired|revoked|not valid).{0,8}(api.?key|access.?token|token|credential)/i.test(lower)) return true
+        if (/(api.?key|access.?token|token|credential).{0,8}(invalid|expired|revoked|not valid)/i.test(lower)) return true
+        if (/authentication (failed|error)/i.test(lower)) return true
+        if (/unauthorized/i.test(lower)) return true
+        if (/personal access tokens? are not supported/i.test(lower)) return true
+        if (/invalid authorization token/i.test(lower)) return true
+    }
+
+    return false
 }
 
 function isStreamingFailure(
@@ -521,6 +561,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                 resumeAttempts: 0,
                 lastRetryAt: 0,
                 gaveUp: false,
+                fatalError: false,
                 orphanWatchStartAt: null,
                 aborting: false,
                 pluginAbortInFlight: false,
@@ -713,6 +754,10 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     }
 
     async function sendContinuePrompt(sid: string, text: string, w: SessionWatch) {
+        if (w.fatalError) {
+            await log("warn", `${short(sid)} - skipping continue, non-retryable error active`)
+            return
+        }
         if (w.continuing && !w.watchdogRetryGuard) {
             await log("debug", `${short(sid)} - continue already in progress, skipping`)
             return
@@ -981,6 +1026,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
     const SUBAGENT_RECOVERY_PROMPT = "It looks like you may have stalled or timed out. Please retry the last operation or continue with the task."
 
     async function recoverSubagent(subagentSid: string): Promise<boolean> {
+        if (sessions.get(subagentSid)?.fatalError) return false
         try {
             await ctx.client.session.prompt({
                 path: { id: subagentSid },
@@ -1119,6 +1165,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         w.pendingRecoveryAt = 0
         w.recoveryAttempts = 0
         w.watchdogRetryGuard = false
+        w.fatalError = false
     }
 
     function resetBusyFlags(w: SessionWatch) {
@@ -1142,6 +1189,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
         w.pendingRecoveryAt = 0
         w.recoveryAttempts = 0
         w.watchdogRetryGuard = false
+        w.fatalError = false
         if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
         // Reset nudge budget on each genuine new busy→work cycle (user prompt or agent re-engagement after nudge)
         w.todoNudgeAttempts = 0
@@ -1220,7 +1268,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
 
     async function checkForToolCallAsText(sid: string, w: SessionWatch) {
         if (typeof sid !== "string" || !sid) return
-        if (w.userCancelled || w.toolTextRecovered) return
+        if (w.userCancelled || w.toolTextRecovered || w.fatalError) return
         if (w.status !== "idle") return
         if (w.checkingToolText) return
         w.checkingToolText = true
@@ -1537,6 +1585,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             await log("warn", `Invalid sid for abort: ${sid} (must start with "ses_")`)
             return false
         }
+        if (w.fatalError) return false
         if (w.userCancelled || w.completionSignaled) return false
         if (w.aborting) return false
 
@@ -1586,6 +1635,7 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
             await log("warn", `tryResume called with invalid sid: ${sid}`)
             return false
         }
+        if (w.fatalError) return false
         const now = Date.now()
         const elapsedSinceRetry = now - w.lastRetryAt
         const requiredBackoff = backoffMs(w.resumeAttempts, baseBackoffMs, maxBackoffMs)
@@ -2252,6 +2302,34 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                     } else {
                         log("warn", `Streaming failure detected but no session ID: ${errorName} - ${errorMessage}`)
                     }
+                }
+
+                if (isNonRetryableError(errorObj)) {
+                    if (sid) {
+                        const w = ensureWatch(sid)
+                        if (!w.fatalError) {
+                            w.fatalError = true
+                            w.status = "idle"
+                            resetIdleFlags(w)
+                            if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
+                            await log("warn", `${short(sid)} - non-retryable provider error (${errorName}): auto-resume paused until a new prompt`)
+                        }
+                    } else {
+                        let flaggedAny = false
+                        for (const [wSid, w] of sessions) {
+                            if (w.status === "busy" && !w.fatalError) {
+                                w.fatalError = true
+                                w.status = "idle"
+                                resetIdleFlags(w)
+                                if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
+                                flaggedAny = true
+                            }
+                        }
+                        if (flaggedAny) {
+                            await log("warn", `non-retryable provider error (${errorName}) with no sessionID: auto-resume paused for all busy sessions`)
+                        }
+                    }
+                    break
                 }
 
                 if (busyCount() === 0) break

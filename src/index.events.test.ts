@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test"
 import { AutoResumePlugin } from "./index"
+import { isNonRetryableError } from "./test-utils"
 
 type PromptCall = { sid: string; body: string; agent?: string }
 
@@ -10,6 +11,7 @@ function createMockContext(opts: {
 }) {
     const promptCalls: PromptCall[] = []
     const abortCalls: Array<{ sid: string }> = []
+    const logCalls: Array<{ level: string; message: string }> = []
 
     const defaultStatusMap: Record<string, { type: string }> = {}
     for (const s of opts.sessions) {
@@ -20,7 +22,9 @@ function createMockContext(opts: {
     const ctx = {
         client: {
             app: {
-                log: mock(async (_o: any) => {})
+                log: mock(async (o: any) => {
+                    logCalls.push({ level: o.body.level, message: o.body.message })
+                })
             },
             session: {
                 list: mock(async () => ({
@@ -52,7 +56,7 @@ function createMockContext(opts: {
         ui: { toast: mock(async () => {}) }
     } as any
 
-    return { ctx, promptCalls, abortCalls }
+    return { ctx, promptCalls, abortCalls, logCalls }
 }
 
 const wait = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -521,6 +525,95 @@ describe("handleEvent - session.error", () => {
     })
 })
 
+describe("handleEvent - non-retryable errors", () => {
+    test("terminal APIError (402 insufficient balance) → no abort, auto-resume disabled for session", async () => {
+        const { ctx, promptCalls, abortCalls, logCalls } = createMockContext({ sessions: [], messages: {} })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+        const emit = (event: string, data: any) => hooks.event!({ event: { type: event, ...data } as any })
+
+        // Session goes busy then errors with 402
+        emit("session.status", { sessionID: "ses_s1", status: "busy" })
+        emit("session.error", { sessionID: "ses_s1", error: { name: "APIError", data: { message: "insufficient balance", statusCode: 402, isRetryable: false } } })
+
+        expect(abortCalls).toHaveLength(0)
+        // No further prompts
+        emit("session.status", { sessionID: "ses_s1", status: "idle" })
+        emit("session.todo.resolved", { sessionID: "ses_s1" })
+        await wait(100)
+        expect(promptCalls).toHaveLength(0)
+        expect(logCalls.some(l => l.level === "warn" && l.message.includes("non-retryable"))).toBe(true)
+    })
+
+    test("terminal ProviderAuthError (invalid api key) → no abort, no prompts", async () => {
+        const { ctx, promptCalls, abortCalls, logCalls } = createMockContext({ sessions: [], messages: {} })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+        const emit = (event: string, data: any) => hooks.event!({ event: { type: event, ...data } as any })
+
+        emit("session.status", { sessionID: "ses_s2", status: "busy" })
+        emit("session.error", { sessionID: "ses_s2", error: { name: "ProviderAuthError", data: { providerID: "openai", message: "invalid api key" } } })
+
+        expect(abortCalls).toHaveLength(0)
+        emit("session.status", { sessionID: "ses_s2", status: "idle" })
+        emit("session.todo.resolved", { sessionID: "ses_s2" })
+        await wait(100)
+        expect(promptCalls).toHaveLength(0)
+        expect(logCalls.some(l => l.level === "warn" && l.message.includes("non-retryable"))).toBe(true)
+    })
+
+    test("retryable 429 rate-limit error → no abort; subsequent idle-with-todos still prompts", async () => {
+        const { ctx, promptCalls, abortCalls } = createMockContext({ sessions: [], messages: {} })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1, checkIntervalMs: 1 })
+        const emit = (event: string, data: any) => hooks.event!({ event: { type: event, ...data } as any })
+
+        emit("session.status", { sessionID: "ses_s3", status: "busy" })
+        emit("session.error", { sessionID: "ses_s3", error: { name: "APIError", data: { message: "rate limit exceeded", statusCode: 429, isRetryable: true } } })
+
+        expect(abortCalls).toHaveLength(0)
+        emit("session.status", { sessionID: "ses_s3", status: "idle" })
+        emit("session.todo.resolved", { sessionID: "ses_s3" })
+        await wait(100)
+        // Should still retry — this is a transient error
+        expect(promptCalls.length).toBeGreaterThan(0)
+    })
+
+    test("fatal error then busy event → flag cleared, subsequent idle with todos resumes", async () => {
+        const { ctx, promptCalls, abortCalls } = createMockContext({ sessions: [], messages: {} })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+        const emit = (event: string, data: any) => hooks.event!({ event: { type: event, ...data } as any })
+
+        // Flag the session
+        emit("session.status", { sessionID: "ses_s4", status: "busy" })
+        emit("session.error", { sessionID: "ses_s4", error: { name: "ProviderAuthError", data: { message: "invalid token" } } })
+
+        emit("session.status", { sessionID: "ses_s4", status: "idle" })
+        await wait(100)
+        expect(promptCalls).toHaveLength(0) // still flagged
+
+        // User sends new prompt → busy event → flag cleared
+        emit("session.status", { sessionID: "ses_s4", status: "busy" })
+        emit("todo.updated", { sessionID: "ses_s4", properties: { todos: [{ id: "t1", content: "task", status: "pending", priority: "high" }] } })
+        emit("session.status", { sessionID: "ses_s4", status: "idle" })
+        await wait(100)
+        expect(promptCalls.length).toBeGreaterThan(0) // resumed
+    })
+
+    test("repeated identical non-retryable error → warn logged only once, no re-prompt", async () => {
+        const { ctx, promptCalls, logCalls } = createMockContext({ sessions: [], messages: {} })
+        const hooks = await AutoResumePlugin(ctx, { enabled: true, baseBackoffMs: 1 })
+        const emit = (event: string, data: any) => hooks.event!({ event: { type: event, ...data } as any })
+
+        emit("session.status", { sessionID: "ses_s5", status: "busy" })
+        const err = { name: "ProviderAuthError", data: { message: "invalid api key" } }
+        emit("session.error", { sessionID: "ses_s5", error: err })
+        emit("session.error", { sessionID: "ses_s5", error: err })
+        emit("session.error", { sessionID: "ses_s5", error: err })
+
+        const warnLogs = logCalls.filter(l => l.level === "warn" && l.message.includes("non-retryable"))
+        expect(warnLogs).toHaveLength(1)
+        expect(promptCalls).toHaveLength(0)
+    })
+})
+
 describe("handleEvent - command.executed", () => {
     test("command.executed → all session flags reset", async () => {
         const { ctx, promptCalls } = createMockContext({
@@ -946,5 +1039,48 @@ describe("handleEvent - edge cases", () => {
         await wait(50)
 
         expect(promptCalls.length).toBe(0)
+    })
+})
+
+describe("isNonRetryableError()", () => {
+    test.each([
+        ["ProviderAuthError", { name: "ProviderAuthError", data: { message: "" } }],
+        ["APIError isRetryable:false", { name: "APIError", data: { isRetryable: false, message: "oops" } }],
+        ["APIError statusCode 401", { name: "APIError", data: { statusCode: 401, message: "" } }],
+        ["APIError statusCode 402", { name: "APIError", data: { statusCode: 402, message: "" } }],
+        ["APIError statusCode 403", { name: "APIError", data: { statusCode: 403, message: "" } }],
+        ["insufficient balance", { name: "X", data: { message: "insufficient balance" } }],
+        ["insufficient budget", { name: "X", data: { message: "insufficient budget" } }],
+        ["insufficient quota", { name: "X", data: { message: "insufficient quota" } }],
+        ["credit balance too low", { name: "X", data: { message: "credit balance is too low" } }],
+        ["out of credits", { name: "X", data: { message: "out of credits" } }],
+        ["not enough balance", { name: "X", data: { message: "not enough balance" } }],
+        ["not enough funds", { name: "X", data: { message: "not enough funds" } }],
+        ["payment required", { name: "X", data: { message: "payment required" } }],
+        ["invalid api key", { name: "X", data: { message: "invalid api key" } }],
+        ["invalid access token", { name: "X", data: { message: "invalid access token" } }],
+        ["token expired", { name: "X", data: { message: "token expired" } }],
+        ["api key revoked", { name: "X", data: { message: "api key revoked" } }],
+        ["authentication failed", { name: "X", data: { message: "authentication failed" } }],
+        ["authentication error", { name: "X", data: { message: "authentication error" } }],
+        ["unauthorized", { name: "X", data: { message: "unauthorized" } }],
+        ["personal access tokens not supported", { name: "X", data: { message: "personal access tokens are not supported" } }],
+        ["invalid authorization token", { name: "X", data: { message: "invalid authorization token" } }],
+        ["token invalid", { name: "X", data: { message: "token invalid" } }],
+        ["credential expired", { name: "X", data: { message: "credential expired" } }],
+    ])("%s → true", (_label, input) => {
+        expect(isNonRetryableError(input)).toBe(true)
+    })
+
+    test.each([
+        ["429 retryable", { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "rate limited" } }],
+        ["500 error", { name: "APIError", data: { statusCode: 500, message: "internal server error" } }],
+        ["timeout", { name: "X", data: { message: "request timeout" } }],
+        ["rate limit text", { name: "X", data: { message: "rate limit exceeded, try again" } }],
+        ["null", undefined],
+        ["empty object", {}],
+        ["MessageAbortedError", { name: "MessageAbortedError", data: { message: "aborted" } }],
+    ])("%s → false", (_label, input) => {
+        expect(isNonRetryableError(input as any)).toBe(false)
     })
 })
