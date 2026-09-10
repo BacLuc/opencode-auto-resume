@@ -2275,6 +2275,9 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                             w.fatalError = true
                             w.status = "idle"
                             resetIdleFlags(w)
+                            w.pendingRecovery = false
+                            w.pendingRecoveryReason = null
+                            w.pendingRecoveryAt = 0
                             if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
                             await log("warn", `${short(sid)} - non-retryable provider error (${errorName}): auto-resume paused until a new prompt`)
                         }
@@ -2285,6 +2288,9 @@ export const AutoResumePlugin: Plugin = async (ctx, options) => {
                                 w.fatalError = true
                                 w.status = "idle"
                                 resetIdleFlags(w)
+                                w.pendingRecovery = false
+                                w.pendingRecoveryReason = null
+                                w.pendingRecoveryAt = 0
                                 if (w.toolTextTimer) { clearTimeout(w.toolTextTimer); w.toolTextTimer = null }
                                 flaggedAny = true
                             }

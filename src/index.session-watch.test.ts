@@ -11,6 +11,7 @@ function createWatch(sid: string, now = Date.now()): SessionWatch {
         resumeAttempts: 0,
         lastRetryAt: 0,
         gaveUp: false,
+        fatalError: false,
         orphanWatchStartAt: null,
         aborting: false,
         toolTextRecovered: false,
