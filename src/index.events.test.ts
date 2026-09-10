@@ -1,6 +1,6 @@
 import { describe, test, expect, mock } from "bun:test"
 import { AutoResumePlugin } from "./index"
-import { isNonRetryableError } from "./test-utils"
+import { isNonRetryableError } from "./non-retryable-error"
 
 type PromptCall = { sid: string; body: string; agent?: string }
 
